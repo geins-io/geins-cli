@@ -167,9 +167,10 @@ export function ChatInput({ disabled = false, copilotActive = false, onSubmit, o
       </Box>
       <Text dimColor>{separator}</Text>
       <Box paddingX={1}>
-        <Text dimColor>
-          {copilotActive ? '⏵⏵ copilot mode on' : '⏵⏵ cli mode on'} (shift+tab to cycle)
+        <Text color={copilotActive ? 'magenta' : 'cyan'}>
+          {copilotActive ? '⏵⏵ copilot mode on' : '⏵⏵ cli mode on'}
         </Text>
+        <Text dimColor> (shift+tab to cycle)</Text>
       </Box>
     </Box>
   );

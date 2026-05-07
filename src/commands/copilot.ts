@@ -20,7 +20,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     name: 'OpenAI Codex',
     cli: 'codex',
     testCmd: ['codex', '--version'],
-    buildCmd: (prompt) => ['codex', '-q', prompt],
+    buildCmd: (prompt) => ['codex', 'exec', prompt],
   },
   {
     name: 'Google Gemini CLI',

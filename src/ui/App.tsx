@@ -15,6 +15,7 @@ import { request } from '../api/client.ts';
 import { getApiUrl } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
+import { Markdown } from './Markdown.tsx';
 import { getCopilotConfig, chatStream } from '../commands/copilot.ts';
 import {
   listWorkflows,
@@ -32,6 +33,117 @@ import {
 } from '../commands/workflows.ts';
 
 const VERSION = '0.1.0';
+
+const THINKING_PHRASES = [
+  'Razzmatazzing...',
+  'Consulting the oracle...',
+  'Wrangling neurons...',
+  'Brewing thoughts...',
+  'Tickling the AI...',
+  'Summoning wisdom...',
+  'Juggling tokens...',
+  'Crunching vibes...',
+  'Doing brain stuff...',
+  'Spinning hamster wheels...',
+  'Poking the matrix...',
+  'Shuffling electrons...',
+  'Warming up synapses...',
+  'Herding bits...',
+  'Whispering to GPUs...',
+  'Aligning chakras...',
+  'Befriending algorithms...',
+  'Calibrating sass levels...',
+  'Defragmenting thoughts...',
+  'Encrypting brilliance...',
+  'Flipping mental pancakes...',
+  'Generating eureka moments...',
+  'Hacking the mainframe...',
+  'Inflating brain balloons...',
+  'Jazzing up the response...',
+  'Knitting logic sweaters...',
+  'Loading witty remarks...',
+  'Manifesting answers...',
+  'Negotiating with servers...',
+  'Orchestrating chaos...',
+  'Polishing pixels...',
+  'Querying the universe...',
+  'Reticulating splines...',
+  'Summoning the cloud gods...',
+  'Tuning the frequency...',
+  'Unscrambling the cosmos...',
+  'Vibrating at AI frequency...',
+  'Waking up the hamsters...',
+  'Xenomorphing data...',
+  'Yodeling at the API...',
+  'Zigzagging through logic...',
+  'Asking the magic 8-ball...',
+  'Booting imagination...',
+  'Charging flux capacitor...',
+  'Downloading inspiration...',
+  'Engineering serendipity...',
+  'Feeding the neural beast...',
+  'Greasing the gears...',
+  'Harvesting brain waves...',
+  'Igniting thought rockets...',
+  'Jolting the circuits...',
+  'Kindling the spark...',
+  'Launching thought bubbles...',
+  'Mining for gold thoughts...',
+  'Nudging the neurons...',
+  'Opening the mind vault...',
+  'Pinging the mothership...',
+  'Questioning reality...',
+  'Running the hamster faster...',
+  'Shaking the magic tree...',
+  'Tickling the tensor...',
+  'Unleashing creativity...',
+  'Vacuuming the brain lint...',
+  'Watering the idea garden...',
+  'X-raying the problem...',
+  'Yanking the wisdom chain...',
+  'Zapping the thought clouds...',
+  'Assembling genius parts...',
+  'Blending brain smoothie...',
+  'Catching flying ideas...',
+  'Distilling pure logic...',
+  'Extracting the good stuff...',
+  'Fluffing the knowledge...',
+  'Grinding the think beans...',
+  'Hugging the algorithm...',
+  'Invoking ancient wisdom...',
+  'Jumpstarting cognition...',
+  'Kneading the data dough...',
+  'Lassoing loose thoughts...',
+  'Microwaving the answer...',
+  'Noodling on it...',
+  'Overcaffeinating the CPU...',
+  'Percolating ideas...',
+  'Quarantining bad takes...',
+  'Revving the think engine...',
+  'Sautéing the data...',
+  'Taming wild thoughts...',
+  'Uncorking the brain...',
+  'Ventilating the mind...',
+  'Winding up the clockwork...',
+  'Xeroxing smart thoughts...',
+  'Yelling at the cloud...',
+  'Zen-mastering the response...',
+  'Abracadabra-ing...',
+  'Bibbidi-bobbidi-thinking...',
+  'Conjuring an answer...',
+  'Daydream processing...',
+  'Espresso-shotting the brain...',
+  'Feng shui-ing the data...',
+  'Googling with my mind...',
+  'Hotwiring the cortex...',
+  'Improvising brilliance...',
+  'Jedi mind-tricking...',
+  'Karate-chopping the problem...',
+  'Levitating the answer...',
+  'Moonwalking through data...',
+  'Ninja-scrolling neurons...',
+  'Om-ing for clarity...',
+];
 
 export function App({ version = VERSION }: { version?: string }) {
   const { exit } = useApp();
@@ -123,10 +235,11 @@ export function App({ version = VERSION }: { version?: string }) {
     // Copilot mode: non-slash input goes to AI
     if (appState.copilotActive && !trimmed.startsWith('/')) {
       logDim(`  you> ${trimmed}`);
+      const thinkPhrase = THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]!;
       appState.setLiveComponent(
         <Box key="copilot-spinner" gap={1} paddingX={1}>
           <Spinner type="dots" />
-          <Text dimColor>Thinking...</Text>
+          <Text dimColor>{thinkPhrase}</Text>
         </Box>,
       );
       try {
@@ -134,10 +247,9 @@ export function App({ version = VERSION }: { version?: string }) {
         await chatStream(trimmed, (chunk) => {
           buffer += chunk;
           const visible = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
-          const indented = visible.split('\n').map(line => `  ${line}`).join('\n');
           appState.setLiveComponent(
-            <Box key="copilot-stream" flexDirection="column" paddingX={1}>
-              <Text>{indented || ' '}</Text>
+            <Box key="copilot-stream" flexDirection="column">
+              <Markdown>{visible || ' '}</Markdown>
             </Box>,
           );
         });
@@ -148,8 +260,9 @@ export function App({ version = VERSION }: { version?: string }) {
           logDim('  ⟐ thinking collapsed');
         }
         if (cleaned) {
-          const indented = cleaned.split('\n').map(line => `  ${line}`).join('\n');
-          logText(indented);
+          appState.addToChat(
+            <Markdown key={`msg-${appState.getNextKey()}`}>{cleaned}</Markdown>,
+          );
         }
       } catch (err) {
         appState.setLiveComponent(null);
@@ -386,7 +499,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   } else {
                     for (const v of Array.isArray(vars) ? vars : [vars]) {
                       const desc = v.description ? ` — ${v.description}` : '';
-                      logText(`  ${v.name} = ${JSON.stringify(v.value)}${desc}`);
+                      logText(`  ${v.key} = ${JSON.stringify(v.value)}${desc}`);
                     }
                   }
                   break;
@@ -415,7 +528,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   let parsed: unknown;
                   try { parsed = JSON.parse(value); } catch { parsed = value; }
                   const desc = args.slice(4).join(' ') || undefined;
-                  await saveVariable({ name, value: parsed, description: desc });
+                  await saveVariable({ key: name, value: parsed, description: desc });
                   logSuccess(`  ✓ Variable '${name}' saved`);
                   break;
                 }

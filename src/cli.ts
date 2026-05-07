@@ -265,7 +265,7 @@ async function runDirect(args: string[]): Promise<void> {
                 } else {
                   for (const v of Array.isArray(vars) ? vars : [vars]) {
                     const desc = v.description ? ` — ${v.description}` : '';
-                    console.log(`${v.name} = ${JSON.stringify(v.value)}${desc}`);
+                    console.log(`${v.key} = ${JSON.stringify(v.value)}${desc}`);
                   }
                 }
                 break;
@@ -290,7 +290,7 @@ async function runDirect(args: string[]): Promise<void> {
                 let parsed: unknown;
                 try { parsed = JSON.parse(value); } catch { parsed = value; }
                 const desc = subArgs.slice(3).join(' ') || undefined;
-                await saveVariable({ name, value: parsed, description: desc });
+                await saveVariable({ key: name, value: parsed, description: desc });
                 console.log(`✓ Variable '${name}' saved`);
                 break;
               }

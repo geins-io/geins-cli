@@ -126,7 +126,7 @@ export async function getExecution(executionId: string): Promise<unknown> {
 // Variables (global workflow variables)
 
 export interface WorkflowVariable {
-  name: string;
+  key: string;
   value: unknown;
   description?: string;
 }
