@@ -15,7 +15,7 @@ export function ChatHistory({
   liveComponent,
 }: ChatHistoryProps) {
   return (
-    <Box flexGrow={1} flexDirection="column" minHeight={0}>
+    <Box flexGrow={1} flexDirection="column" minHeight={0} overflow="hidden">
       {ready && welcomeComponent}
       {queuedComponents.map((component, index) => {
         const key =

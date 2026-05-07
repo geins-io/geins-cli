@@ -44,12 +44,17 @@ export async function request<T = unknown>(path: string, options?: RequestOption
 
   const method = options?.method ?? 'GET';
 
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${session.accessToken}`,
+    'Content-Type': 'application/json',
+  };
+  if (session.accountKey) {
+    headers['x-account-key'] = session.accountKey;
+  }
+
   const res = await fetch(url.toString(), {
     method,
-    headers: {
-      'Authorization': `Bearer ${session.accessToken}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: options?.body ? JSON.stringify(options.body) : undefined,
   });
 
@@ -62,12 +67,11 @@ export async function request<T = unknown>(path: string, options?: RequestOption
     await saveSession(session);
     cachedSession = session;
 
+    headers['Authorization'] = `Bearer ${session.accessToken}`;
+
     const retry = await fetch(url.toString(), {
       method,
-      headers: {
-        'Authorization': `Bearer ${session.accessToken}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: options?.body ? JSON.stringify(options.body) : undefined,
     });
 

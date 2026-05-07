@@ -14,6 +14,22 @@ import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request } from '../api/client.ts';
 import { getApiUrl } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
+import { SelectCopilot } from './SelectCopilot.tsx';
+import { getCopilotConfig, chatStream } from '../commands/copilot.ts';
+import {
+  listWorkflows,
+  getWorkflow,
+  runWorkflow,
+  testRunWorkflow,
+  getLiveExecution,
+  getExecutionLogs,
+  getManifest,
+  enableWorkflow,
+  disableWorkflow,
+  listVariables,
+  getVariable,
+  saveVariable,
+} from '../commands/workflows.ts';
 
 const VERSION = '0.1.0';
 
@@ -104,6 +120,44 @@ export function App({ version = VERSION }: { version?: string }) {
     const trimmed = input.trim();
     if (!trimmed) return;
 
+    // Copilot mode: non-slash input goes to AI
+    if (appState.copilotActive && !trimmed.startsWith('/')) {
+      logDim(`  you> ${trimmed}`);
+      appState.setLiveComponent(
+        <Box key="copilot-spinner" gap={1} paddingX={1}>
+          <Spinner type="dots" />
+          <Text dimColor>Thinking...</Text>
+        </Box>,
+      );
+      try {
+        let buffer = '';
+        await chatStream(trimmed, (chunk) => {
+          buffer += chunk;
+          const visible = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+          const indented = visible.split('\n').map(line => `  ${line}`).join('\n');
+          appState.setLiveComponent(
+            <Box key="copilot-stream" flexDirection="column" paddingX={1}>
+              <Text>{indented || ' '}</Text>
+            </Box>,
+          );
+        });
+        appState.setLiveComponent(null);
+        const hasThinking = /<think>[\s\S]*?<\/think>/.test(buffer);
+        const cleaned = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (hasThinking) {
+          logDim('  ⟐ thinking collapsed');
+        }
+        if (cleaned) {
+          const indented = cleaned.split('\n').map(line => `  ${line}`).join('\n');
+          logText(indented);
+        }
+      } catch (err) {
+        appState.setLiveComponent(null);
+        logError(`  ${formatError(err)}`);
+      }
+      return;
+    }
+
     const line = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
     const parts = line.match(/(?:[^\s"]+|"[^"]*")/g) ?? [];
     if (parts.length === 0) return;
@@ -119,15 +173,16 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('');
           logText('  Commands');
           logText('');
-          logText('  /help     Show available commands');
-          logText('  /login    Authenticate with Geins');
-          logText('  /logout   Clear credentials and exit');
-          logText('  /whoami   Show current user');
-          logText('  /api      Raw API request          /api GET /products');
-          logText('  /ping     Check service health      /ping [service...]');
-          logText('  /theme    Switch dark/light mode');
-          logText('  /clear    Clear the screen');
-          logText('  /exit     Exit the CLI');
+          logText('  /help       Show available commands');
+          logText('  /login      Authenticate with Geins');
+          logText('  /logout     Clear credentials and exit');
+          logText('  /whoami     Show current user');
+          logText('  /workflow   Workflow commands       /workflow help');
+          logText('  /api        Raw API request         /api GET /products');
+          logText('  /copilot    Toggle AI copilot mode  /copilot set');
+          logText('  /theme      Switch dark/light mode');
+          logText('  /clear      Clear the screen');
+          logText('  /exit       Exit the CLI');
           logText('');
           break;
         }
@@ -159,6 +214,240 @@ export function App({ version = VERSION }: { version?: string }) {
           break;
         }
 
+        case 'workflow': {
+          const sub = args[0]?.toLowerCase() ?? 'list';
+          switch (sub) {
+            case 'list': {
+              appState.setLiveComponent(
+                <Box key="wf-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Loading workflows...</Text>
+                </Box>,
+              );
+              const data = await listWorkflows();
+              appState.setLiveComponent(null);
+              for (const wf of data.items) {
+                const status = wf.enabled ? '●' : '○';
+                logText(`  ${status} ${wf.name}`);
+              }
+              if (data.totalCount > 0) {
+                logDim(`  ${data.totalCount} workflows`);
+              }
+              break;
+            }
+            case 'get': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /workflow get <id>'); break; }
+              appState.setLiveComponent(
+                <Box key="wf-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Loading workflow...</Text>
+                </Box>,
+              );
+              const wfData = await getWorkflow(id);
+              appState.setLiveComponent(null);
+              logText(`  ${JSON.stringify(wfData, null, 2)}`);
+              break;
+            }
+            case 'run': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /workflow run <id> [--watch]'); break; }
+              const watch = args.includes('--watch');
+              let input: unknown;
+              const bodyIdx = args.indexOf('--body');
+              if (bodyIdx !== -1 && args[bodyIdx + 1]) {
+                try { input = JSON.parse(args[bodyIdx + 1]!); } catch {
+                  logError('  Invalid JSON in --body'); break;
+                }
+              }
+              appState.setLiveComponent(
+                <Box key="wf-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>{watch ? 'Starting test run...' : 'Executing workflow...'}</Text>
+                </Box>,
+              );
+              const runResult = watch
+                ? await testRunWorkflow(id, input)
+                : await runWorkflow(id, input) as { ExecutionId?: string };
+              const execId = (runResult as { ExecutionId?: string }).ExecutionId;
+              if (!watch || !execId) {
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Workflow triggered`);
+                logText(`  ${JSON.stringify(runResult, null, 2)}`);
+                break;
+              }
+              logSuccess(`  ✓ Test run started: ${execId}`);
+              let lastSeq = -1;
+              const poll = async () => {
+                for (let i = 0; i < 120; i++) {
+                  await Bun.sleep(2000);
+                  try {
+                    const live = await getLiveExecution(execId);
+                    if (live.Seq !== lastSeq) {
+                      lastSeq = live.Seq;
+                      const nodeEntries = Object.entries(live.Nodes);
+                      const nodeLines = nodeEntries.map(([nodeId, node]) => {
+                        const icon = node.Status === 'completed' ? '✓'
+                          : node.Status === 'failed' ? '✗'
+                          : node.Status === 'running' ? '⟳'
+                          : '·';
+                        const dur = node.DurationMs ? ` ${node.DurationMs}ms` : '';
+                        const name = node.Name || nodeId;
+                        return `  ${icon} ${name}  ${node.Status}${dur}`;
+                      });
+                      appState.setLiveComponent(
+                        <Box key="wf-live" flexDirection="column" paddingX={1}>
+                          <Box gap={1}>
+                            {!live.IsComplete && <Spinner type="dots" />}
+                            <Text dimColor>
+                              {live.Status} · {nodeEntries.length}/{live.TotalNodes} nodes
+                            </Text>
+                          </Box>
+                          {nodeLines.map((line, idx) => (
+                            <Text key={idx}>{line}</Text>
+                          ))}
+                        </Box>,
+                      );
+                    }
+                    if (live.IsComplete) {
+                      appState.setLiveComponent(null);
+                      const statusColor = live.Status === 'completed' ? 'green' : 'red';
+                      appState.addToChat(
+                        <Text key={`run-done-${appState.getNextKey()}`} color={statusColor}>
+                          {`  ${live.Status === 'completed' ? '✓' : '✗'} Finished: ${live.Status}`}
+                        </Text>,
+                      );
+                      return;
+                    }
+                  } catch {
+                    // ignore polling errors, retry
+                  }
+                }
+                appState.setLiveComponent(null);
+                logDim('  Polling timed out after 4 minutes');
+              };
+              poll();
+              break;
+            }
+            case 'logs': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /workflow logs <id>'); break; }
+              appState.setLiveComponent(
+                <Box key="wf-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Loading logs...</Text>
+                </Box>,
+              );
+              const logsData = await getExecutionLogs(id);
+              appState.setLiveComponent(null);
+              logText(`  ${JSON.stringify(logsData, null, 2)}`);
+              break;
+            }
+            case 'manifest': {
+              appState.setLiveComponent(
+                <Box key="wf-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Loading manifest...</Text>
+                </Box>,
+              );
+              const manifest = await getManifest();
+              appState.setLiveComponent(null);
+              logText(`  ${JSON.stringify(manifest, null, 2)}`);
+              break;
+            }
+            case 'enable': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /workflow enable <id>'); break; }
+              await enableWorkflow(id);
+              logSuccess(`  ✓ Workflow enabled`);
+              break;
+            }
+            case 'disable': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /workflow disable <id>'); break; }
+              await disableWorkflow(id);
+              logSuccess(`  ✓ Workflow disabled`);
+              break;
+            }
+            case 'vars': {
+              const varsAction = args[1]?.toLowerCase() ?? 'list';
+              switch (varsAction) {
+                case 'list': {
+                  appState.setLiveComponent(
+                    <Box key="vars-spinner" gap={1} paddingX={1}>
+                      <Spinner type="dots" />
+                      <Text dimColor>Loading variables...</Text>
+                    </Box>,
+                  );
+                  const vars = await listVariables();
+                  appState.setLiveComponent(null);
+                  if (!vars || (Array.isArray(vars) && vars.length === 0)) {
+                    logDim('  No variables found');
+                  } else {
+                    for (const v of Array.isArray(vars) ? vars : [vars]) {
+                      const desc = v.description ? ` — ${v.description}` : '';
+                      logText(`  ${v.name} = ${JSON.stringify(v.value)}${desc}`);
+                    }
+                  }
+                  break;
+                }
+                case 'get': {
+                  const name = args[2];
+                  if (!name) { logError('  Usage: /workflow vars get <name>'); break; }
+                  appState.setLiveComponent(
+                    <Box key="vars-spinner" gap={1} paddingX={1}>
+                      <Spinner type="dots" />
+                      <Text dimColor>Loading variable...</Text>
+                    </Box>,
+                  );
+                  const varData = await getVariable(name);
+                  appState.setLiveComponent(null);
+                  logText(`  ${JSON.stringify(varData, null, 2)}`);
+                  break;
+                }
+                case 'set': {
+                  const name = args[2];
+                  const value = args[3];
+                  if (!name || value === undefined) {
+                    logError('  Usage: /workflow vars set <name> <value> [description]');
+                    break;
+                  }
+                  let parsed: unknown;
+                  try { parsed = JSON.parse(value); } catch { parsed = value; }
+                  const desc = args.slice(4).join(' ') || undefined;
+                  await saveVariable({ name, value: parsed, description: desc });
+                  logSuccess(`  ✓ Variable '${name}' saved`);
+                  break;
+                }
+                default:
+                  logError(`  Unknown vars action: ${varsAction}`);
+                  logDim('  Usage: /workflow vars [list|get|set]');
+              }
+              break;
+            }
+            case 'help':
+              logText('');
+              logText('  Workflow commands');
+              logText('');
+              logText('  /workflow list            List all workflows');
+              logText('  /workflow get <id>        Show workflow details');
+              logText('  /workflow run <id>        Execute a workflow');
+              logText('  /workflow logs <id>       Show execution logs');
+              logText('  /workflow manifest        Show workflow schema');
+              logText('  /workflow enable <id>     Enable trigger');
+              logText('  /workflow disable <id>    Disable trigger');
+              logText('  /workflow vars            List global variables');
+              logText('  /workflow vars get <n>    Show a variable');
+              logText('  /workflow vars set <n> <v>  Set a variable');
+              logText('');
+              break;
+            default:
+              logError(`  Unknown subcommand: ${sub}`);
+              logDim('  Type /workflow help for available commands');
+          }
+          break;
+        }
+
         case 'api': {
           const method = args[0]?.toUpperCase() ?? 'GET';
           const path = args[1];
@@ -187,29 +476,29 @@ export function App({ version = VERSION }: { version?: string }) {
           break;
         }
 
-        case 'ping': {
-          const services = args.length > 0 ? args : ['auth', 'account', 'order', 'product'];
-          appState.setLiveComponent(
-            <Box key="ping-spinner" gap={1} paddingX={1}>
-              <Spinner type="dots" />
-              <Text dimColor>Pinging services...</Text>
-            </Box>,
-          );
-          for (const svc of services) {
-            const start = Date.now();
-            try {
-              const res = await fetch(`${getApiUrl()}/${svc}/ping`);
-              const ms = Date.now() - start;
-              if (res.ok) {
-                logSuccess(`  ✓ ${svc} ${ms}ms`);
-              } else {
-                logError(`  ✗ ${svc} ${res.status} ${ms}ms`);
-              }
-            } catch {
-              logError(`  ✗ ${svc} unreachable ${Date.now() - start}ms`);
-            }
+        case 'provider': {
+          appState.setActiveMode('select-copilot');
+          break;
+        }
+
+        case 'copilot': {
+          const sub = args[0]?.toLowerCase();
+          if (sub === 'set') {
+            appState.setActiveMode('select-copilot');
+            break;
           }
-          appState.setLiveComponent(null);
+          if (appState.copilotActive) {
+            appState.setCopilotActive(false);
+            logSuccess('  ✓ Copilot mode disabled');
+            break;
+          }
+          const existing = await getCopilotConfig();
+          if (existing) {
+            appState.setCopilotActive(true);
+            logSuccess(`  ✓ Copilot mode enabled (${existing.command})`);
+          } else {
+            appState.setActiveMode('select-copilot');
+          }
           break;
         }
 
@@ -284,8 +573,37 @@ export function App({ version = VERSION }: { version?: string }) {
         />
       )}
 
+      {appState.activeMode === 'select-copilot' && (
+        <SelectCopilot
+          onComplete={() => {
+            appState.setActiveMode(null);
+            appState.setCopilotActive(true);
+          }}
+          onCancel={() => {
+            logDim('  Copilot setup cancelled.');
+            appState.setActiveMode(null);
+          }}
+          onLog={(text) => logText(`  ${text}`)}
+        />
+      )}
+
       {!isModal && (
-        <ChatInput onSubmit={handleCommand} />
+        <ChatInput
+          onSubmit={handleCommand}
+          copilotActive={appState.copilotActive}
+          onToggleCopilot={async () => {
+            if (appState.copilotActive) {
+              appState.setCopilotActive(false);
+            } else {
+              const existing = await getCopilotConfig();
+              if (existing) {
+                appState.setCopilotActive(true);
+              } else {
+                appState.setActiveMode('select-copilot');
+              }
+            }
+          }}
+        />
       )}
     </Box>
   );

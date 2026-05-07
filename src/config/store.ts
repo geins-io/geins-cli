@@ -6,11 +6,18 @@ const CONFIG_DIR = join(homedir(), '.config', 'geins');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const SESSION_PATH = join(CONFIG_DIR, 'session.json');
 
+export interface CopilotConfig {
+  cli: string;
+  command: string;
+  model?: string;
+}
+
 export interface GeinsConfig {
   apiUrl?: string;
   defaultAccount?: string;
   outputFormat?: 'table' | 'json';
   theme?: 'dark' | 'light';
+  copilot?: CopilotConfig;
 }
 
 export interface StoredSession {

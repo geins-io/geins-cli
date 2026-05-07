@@ -3,7 +3,7 @@ import { loadSession } from '../../auth/session.ts';
 import { loadConfig, saveConfig } from '../../config/store.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
-export type ActiveMode = 'login' | 'select-account' | null;
+export type ActiveMode = 'login' | 'select-account' | 'select-copilot' | null;
 
 export interface AppStatus {
   user: string;
@@ -29,6 +29,9 @@ export function useAppState() {
 
   // Pending auth for multi-account flow
   const [pendingAuth, setPendingAuth] = useState<AuthResponse | null>(null);
+
+  // Copilot mode
+  const [copilotActive, setCopilotActive] = useState(false);
 
   const getNextKey = useCallback(() => {
     keyCounter.current += 1;
@@ -84,6 +87,8 @@ export function useAppState() {
     getNextKey,
     pendingAuth,
     setPendingAuth,
+    copilotActive,
+    setCopilotActive,
   };
 }
 
