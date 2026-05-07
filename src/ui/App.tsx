@@ -50,11 +50,13 @@ export function App({ version = VERSION }: { version?: string }) {
     try {
       const user = await fetchUser(auth.accessToken);
       const name = user.name || [user.firstName, user.lastName].filter(Boolean).join(' ') || 'Unknown';
+      const accountName = auth.accounts?.find(a => a.accountKey === accountKey)?.displayName ?? '';
 
       await saveSession({
         accessToken: auth.accessToken,
         refreshToken: auth.refreshToken,
         accountKey,
+        accountName,
         tokenExpires: parseJwtExp(auth.accessToken),
         user: {
           email: user.email ?? '',
@@ -147,7 +149,12 @@ export function App({ version = VERSION }: { version?: string }) {
             break;
           }
           logText(`  ${session.user.name} <${session.user.email}>`);
-          if (session.accountKey) logText(`  Account: ${session.accountKey}`);
+          if (session.accountKey) {
+            const label = session.accountName
+              ? `${session.accountName} (${session.accountKey})`
+              : session.accountKey;
+            logText(`  Account: ${label}`);
+          }
           if (session.user.roles.length > 0) logText(`  Roles: ${session.user.roles.join(', ')}`);
           break;
         }

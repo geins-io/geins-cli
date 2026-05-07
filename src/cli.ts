@@ -69,7 +69,12 @@ async function runDirect(args: string[]): Promise<void> {
         const session = await loadSession();
         if (!session) notLoggedIn();
         console.log(`${session.user.name} <${session.user.email}>`);
-        if (session.accountKey) console.log(`Account: ${session.accountKey}`);
+        if (session.accountKey) {
+          const label = session.accountName
+            ? `${session.accountName} (${session.accountKey})`
+            : session.accountKey;
+          console.log(`Account: ${label}`);
+        }
         if (session.user.roles.length > 0) console.log(`Roles: ${session.user.roles.join(', ')}`);
         break;
       }

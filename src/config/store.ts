@@ -17,6 +17,7 @@ export interface StoredSession {
   accessToken: string;
   refreshToken: string;
   accountKey: string;
+  accountName: string;
   tokenExpires: number;
   user: {
     email: string;

@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box } from 'ink';
-import { ChatQueue } from './ChatQueue.tsx';
 
 interface ChatHistoryProps {
   ready: boolean;
@@ -18,9 +17,16 @@ export function ChatHistory({
   return (
     <Box flexGrow={1} flexDirection="column" minHeight={0}>
       {ready && welcomeComponent}
-      {ready && queuedComponents.length > 0 && (
-        <ChatQueue queuedComponents={queuedComponents} />
-      )}
+      {queuedComponents.map((component, index) => {
+        const key =
+          component &&
+          typeof component === 'object' &&
+          'key' in component &&
+          component.key
+            ? component.key
+            : `msg-${index}`;
+        return <Box key={key} flexDirection="column">{component}</Box>;
+      })}
       {liveComponent && (
         <Box flexDirection="column">{liveComponent}</Box>
       )}
