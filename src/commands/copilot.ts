@@ -26,7 +26,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['codex', '--version'],
     contextWindow: 128000,
     useStdin: true,
-    buildCmd: () => ['codex', 'exec', '--quiet', '-'],
+    buildCmd: () => ['codex', 'exec', '--ephemeral', '--skip-git-repo-check', '-'],
   },
   {
     name: 'Google Gemini CLI',

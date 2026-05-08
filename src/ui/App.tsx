@@ -32,6 +32,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
+import { getProduct } from '../commands/products.ts';
 
 const VERSION = '0.1.0';
 
@@ -243,6 +244,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /logout     Clear credentials and exit');
           logText('  /whoami     Show current user');
           logText('  /workflow   Workflow commands       /workflow help');
+          logText('  /product    Product commands        /product get <id>');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /copilot    Toggle AI copilot mode  /copilot set');
           if (appState.copilotActive) {
@@ -512,6 +514,44 @@ export function App({ version = VERSION }: { version?: string }) {
             default:
               logError(`  Unknown subcommand: ${sub}`);
               logDim('  Type /workflow help for available commands');
+          }
+          break;
+        }
+
+        case 'product': {
+          const sub = args[0]?.toLowerCase() ?? '';
+          switch (sub) {
+            case 'get': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /product get <id>'); break; }
+              appState.setLiveComponent(
+                <Box key="product-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Fetching product {id}...</Text>
+                </Box>,
+              );
+              const product = await getProduct(id);
+              appState.setLiveComponent(null);
+              const status = product.active ? '●' : '○';
+              logText(`  ${status} ${product.name.trim()}  (${product._id})`);
+              if (product.articleNumber) logText(`    Article: ${product.articleNumber}`);
+              logText(`    Price: ${product.purchasePrice} ${product.purchasePriceCurrency}`);
+              if (product.brand) logText(`    Brand: ${product.brand._id}`);
+              logText(`    Category: ${product.mainCategoryId}`);
+              break;
+            }
+            case 'help':
+              logText('');
+              logText('  /product get <id>    Show product details');
+              logText('');
+              break;
+            default:
+              if (!sub) {
+                logDim('  Usage: /product <subcommand>');
+              } else {
+                logError(`  Unknown subcommand: ${sub}`);
+              }
+              logDim('  Type /product help for available commands');
           }
           break;
         }

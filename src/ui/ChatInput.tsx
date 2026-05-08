@@ -8,6 +8,7 @@ const COMMANDS: Record<string, string> = {
   logout: 'Clear credentials',
   whoami: 'Show current user',
   workflow: 'Workflow commands',
+  product: 'Product commands',
   copilot: 'Toggle AI copilot mode',
   provider: 'Switch copilot provider',
   new: 'New conversation',
@@ -19,6 +20,7 @@ const COMMANDS: Record<string, string> = {
 
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
+  product: ['get', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   copilot: ['set'],
 };
@@ -33,6 +35,9 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     enable: '<id>',
     disable: '<id>',
     vars: 'list | get <name> | set <name> <value>',
+  },
+  product: {
+    get: '<id>',
   },
   api: {
     GET: '<path>',

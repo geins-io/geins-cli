@@ -7,6 +7,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
+import { getProduct } from './commands/products.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -59,6 +60,7 @@ async function runDirect(args: string[]): Promise<void> {
     console.log('  logout    Clear stored credentials');
     console.log('  whoami    Show current user and account');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
+    console.log('  product    Product commands (get)');
     console.log('  api       Raw API request\n');
     console.log('Global flags:');
     console.log('  --json      Force JSON output');
@@ -304,6 +306,43 @@ async function runDirect(args: string[]): Promise<void> {
           default:
             console.error(`Unknown subcommand: workflow ${sub}`);
             console.error('Subcommands: list, get, create, update, run, manifest, logs, enable, disable, vars');
+            process.exit(1);
+        }
+        break;
+      }
+      case 'product': {
+        const sub = commandArgs[0]?.toLowerCase() ?? '';
+        const subArgs = commandArgs.slice(1);
+        const jsonMode = commandArgs.includes('--json');
+
+        switch (sub) {
+          case 'get': {
+            const id = subArgs[0];
+            if (!id) {
+              console.error('Usage: geins product get <id>');
+              process.exit(1);
+            }
+            const product = await getProduct(id);
+            if (jsonMode) {
+              console.log(JSON.stringify(product, null, 2));
+            } else {
+              const status = product.active ? '●' : '○';
+              console.log(`${status} ${product.name.trim()}  (${product._id})`);
+              if (product.articleNumber) console.log(`  Article: ${product.articleNumber}`);
+              console.log(`  Price: ${product.purchasePrice} ${product.purchasePriceCurrency}`);
+              if (product.brand) console.log(`  Brand: ${product.brand._id}`);
+              console.log(`  Category: ${product.mainCategoryId}`);
+              console.log(`  Updated: ${product.dateUpdated}`);
+            }
+            break;
+          }
+          default:
+            if (!sub) {
+              console.error('Usage: geins product <subcommand>');
+            } else {
+              console.error(`Unknown subcommand: product ${sub}`);
+            }
+            console.error('Subcommands: get');
             process.exit(1);
         }
         break;
