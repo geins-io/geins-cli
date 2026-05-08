@@ -18,7 +18,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['claude', '--version'],
     contextWindow: 200000,
     useStdin: true,
-    buildCmd: () => ['claude', '-p', '--skip-git-repo-check', '-'],
+    buildCmd: () => ['claude', '-p'],
   },
   {
     name: 'OpenAI Codex',
@@ -26,7 +26,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['codex', '--version'],
     contextWindow: 128000,
     useStdin: true,
-    buildCmd: () => ['codex', 'exec', '-'],
+    buildCmd: () => ['codex', 'exec', '--quiet', '-'],
   },
   {
     name: 'Google Gemini CLI',
@@ -34,7 +34,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['gemini', '--version'],
     contextWindow: 1000000,
     useStdin: true,
-    buildCmd: () => ['gemini', '-p', '-'],
+    buildCmd: () => ['gemini', '-p', ''],
   },
   {
     name: 'Ollama',
