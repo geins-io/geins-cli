@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { Box, Text, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 
@@ -10,6 +10,7 @@ const COMMANDS: Record<string, string> = {
   workflow: 'Workflow commands',
   copilot: 'Toggle AI copilot mode',
   provider: 'Switch copilot provider',
+  new: 'New conversation',
   api: 'Raw API request',
   theme: 'Switch dark/light mode',
   clear: 'Clear the screen',
@@ -59,11 +60,14 @@ export function ChatInput({ disabled = false, copilotActive = false, onSubmit, o
   const [menuIndex, setMenuIndex] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
   const [inputKey, setInputKey] = useState(0);
+  const historyRef = useRef<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
   const getMatches = (input: string): string[] => {
     const query = input.startsWith('/') ? input.slice(1) : input;
-    if (!query && input === '/') return COMMAND_NAMES;
-    return COMMAND_NAMES.filter(c => c.startsWith(query.toLowerCase()));
+    const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new');
+    if (!query && input === '/') return available;
+    return available.filter(c => c.startsWith(query.toLowerCase()));
   };
 
   const matches = showMenu ? getMatches(value) : [];
@@ -79,6 +83,20 @@ export function ChatInput({ disabled = false, copilotActive = false, onSubmit, o
     }
     if (key.downArrow && showMenu && matches.length > 0) {
       setMenuIndex(i => (i >= matches.length - 1 ? 0 : i + 1));
+      return;
+    }
+    if (key.upArrow && !showMenu && historyRef.current.length > 0) {
+      const newIndex = historyIndex < historyRef.current.length - 1 ? historyIndex + 1 : historyIndex;
+      setHistoryIndex(newIndex);
+      setValue(historyRef.current[historyRef.current.length - 1 - newIndex]!);
+      setInputKey(k => k + 1);
+      return;
+    }
+    if (key.downArrow && !showMenu && historyIndex >= 0) {
+      const newIndex = historyIndex - 1;
+      setHistoryIndex(newIndex);
+      setValue(newIndex < 0 ? '' : historyRef.current[historyRef.current.length - 1 - newIndex]!);
+      setInputKey(k => k + 1);
       return;
     }
     if (key.tab && key.shift && onToggleCopilot) {
@@ -105,12 +123,13 @@ export function ChatInput({ disabled = false, copilotActive = false, onSubmit, o
   };
 
   const handleSubmit = (input: string) => {
-    if (showMenu && matches.length > 0) {
-      onSubmit(`/${matches[menuIndex]!}`);
-    } else {
-      onSubmit(input);
+    const submitted = showMenu && matches.length > 0 ? `/${matches[menuIndex]!}` : input;
+    if (submitted.trim()) {
+      historyRef.current.push(submitted.trim());
     }
+    onSubmit(submitted);
     setValue('');
+    setHistoryIndex(-1);
     setShowMenu(false);
     setMenuIndex(0);
   };

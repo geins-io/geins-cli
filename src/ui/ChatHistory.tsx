@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box } from 'ink';
+import { Box, Static } from 'ink';
 
 interface ChatHistoryProps {
   ready: boolean;
@@ -14,22 +14,27 @@ export function ChatHistory({
   queuedComponents,
   liveComponent,
 }: ChatHistoryProps) {
+  const staticItems = ready && welcomeComponent
+    ? [welcomeComponent, ...queuedComponents]
+    : queuedComponents;
+
   return (
-    <Box flexGrow={1} flexDirection="column" minHeight={0} overflow="hidden">
-      {ready && welcomeComponent}
-      {queuedComponents.map((component, index) => {
-        const key =
-          component &&
-          typeof component === 'object' &&
-          'key' in component &&
-          component.key
-            ? component.key
-            : `msg-${index}`;
-        return <Box key={key} flexDirection="column">{component}</Box>;
-      })}
+    <>
+      <Static items={staticItems}>
+        {(component, index) => {
+          const key =
+            component &&
+            typeof component === 'object' &&
+            'key' in component &&
+            component.key
+              ? String(component.key)
+              : `msg-${index}`;
+          return <Box key={key} flexDirection="column">{component}</Box>;
+        }}
+      </Static>
       {liveComponent && (
         <Box flexDirection="column">{liveComponent}</Box>
       )}
-    </Box>
+    </>
   );
 }

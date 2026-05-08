@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import { Box, Text, useApp, useWindowSize } from 'ink';
+import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
 import { ChatHistory } from './ChatHistory.tsx';
 import { ChatInput } from './ChatInput.tsx';
@@ -16,7 +16,8 @@ import { getApiUrl } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
-import { getCopilotConfig, chatStream } from '../commands/copilot.ts';
+import { ThinkingIndicator } from './ThinkingIndicator.tsx';
+import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult } from '../commands/copilot.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -34,120 +35,8 @@ import {
 
 const VERSION = '0.1.0';
 
-const THINKING_PHRASES = [
-  'Razzmatazzing...',
-  'Consulting the oracle...',
-  'Wrangling neurons...',
-  'Brewing thoughts...',
-  'Tickling the AI...',
-  'Summoning wisdom...',
-  'Juggling tokens...',
-  'Crunching vibes...',
-  'Doing brain stuff...',
-  'Spinning hamster wheels...',
-  'Poking the matrix...',
-  'Shuffling electrons...',
-  'Warming up synapses...',
-  'Herding bits...',
-  'Whispering to GPUs...',
-  'Aligning chakras...',
-  'Befriending algorithms...',
-  'Calibrating sass levels...',
-  'Defragmenting thoughts...',
-  'Encrypting brilliance...',
-  'Flipping mental pancakes...',
-  'Generating eureka moments...',
-  'Hacking the mainframe...',
-  'Inflating brain balloons...',
-  'Jazzing up the response...',
-  'Knitting logic sweaters...',
-  'Loading witty remarks...',
-  'Manifesting answers...',
-  'Negotiating with servers...',
-  'Orchestrating chaos...',
-  'Polishing pixels...',
-  'Querying the universe...',
-  'Reticulating splines...',
-  'Summoning the cloud gods...',
-  'Tuning the frequency...',
-  'Unscrambling the cosmos...',
-  'Vibrating at AI frequency...',
-  'Waking up the hamsters...',
-  'Xenomorphing data...',
-  'Yodeling at the API...',
-  'Zigzagging through logic...',
-  'Asking the magic 8-ball...',
-  'Booting imagination...',
-  'Charging flux capacitor...',
-  'Downloading inspiration...',
-  'Engineering serendipity...',
-  'Feeding the neural beast...',
-  'Greasing the gears...',
-  'Harvesting brain waves...',
-  'Igniting thought rockets...',
-  'Jolting the circuits...',
-  'Kindling the spark...',
-  'Launching thought bubbles...',
-  'Mining for gold thoughts...',
-  'Nudging the neurons...',
-  'Opening the mind vault...',
-  'Pinging the mothership...',
-  'Questioning reality...',
-  'Running the hamster faster...',
-  'Shaking the magic tree...',
-  'Tickling the tensor...',
-  'Unleashing creativity...',
-  'Vacuuming the brain lint...',
-  'Watering the idea garden...',
-  'X-raying the problem...',
-  'Yanking the wisdom chain...',
-  'Zapping the thought clouds...',
-  'Assembling genius parts...',
-  'Blending brain smoothie...',
-  'Catching flying ideas...',
-  'Distilling pure logic...',
-  'Extracting the good stuff...',
-  'Fluffing the knowledge...',
-  'Grinding the think beans...',
-  'Hugging the algorithm...',
-  'Invoking ancient wisdom...',
-  'Jumpstarting cognition...',
-  'Kneading the data dough...',
-  'Lassoing loose thoughts...',
-  'Microwaving the answer...',
-  'Noodling on it...',
-  'Overcaffeinating the CPU...',
-  'Percolating ideas...',
-  'Quarantining bad takes...',
-  'Revving the think engine...',
-  'Sautéing the data...',
-  'Taming wild thoughts...',
-  'Uncorking the brain...',
-  'Ventilating the mind...',
-  'Winding up the clockwork...',
-  'Xeroxing smart thoughts...',
-  'Yelling at the cloud...',
-  'Zen-mastering the response...',
-  'Abracadabra-ing...',
-  'Bibbidi-bobbidi-thinking...',
-  'Conjuring an answer...',
-  'Daydream processing...',
-  'Espresso-shotting the brain...',
-  'Feng shui-ing the data...',
-  'Googling with my mind...',
-  'Hotwiring the cortex...',
-  'Improvising brilliance...',
-  'Jedi mind-tricking...',
-  'Karate-chopping the problem...',
-  'Levitating the answer...',
-  'Moonwalking through data...',
-  'Ninja-scrolling neurons...',
-  'Om-ing for clarity...',
-];
-
 export function App({ version = VERSION }: { version?: string }) {
   const { exit } = useApp();
-  const { rows } = useWindowSize();
   const appState = useAppState();
 
   const logText = useCallback((text: string) => {
@@ -234,35 +123,98 @@ export function App({ version = VERSION }: { version?: string }) {
 
     // Copilot mode: non-slash input goes to AI
     if (appState.copilotActive && !trimmed.startsWith('/')) {
-      logDim(`  you> ${trimmed}`);
-      const thinkPhrase = THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]!;
+      appState.addToChat(
+        <Text key={`msg-${appState.getNextKey()}`} bold>{`❯ ${trimmed}`}</Text>,
+      );
+      const copilotCfg = await getCopilotConfig();
+      const providerLabel = copilotCfg
+        ? copilotCfg.model ? `${copilotCfg.command} · ${copilotCfg.model}` : copilotCfg.command
+        : 'copilot';
       appState.setLiveComponent(
-        <Box key="copilot-spinner" gap={1} paddingX={1}>
-          <Spinner type="dots" />
-          <Text dimColor>{thinkPhrase}</Text>
-        </Box>,
+        <ThinkingIndicator key="copilot-thinking" />,
       );
       try {
-        let buffer = '';
-        await chatStream(trimmed, (chunk) => {
-          buffer += chunk;
-          const visible = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+        let streamBuffer = '';
+        const rawBuffer = await chatStream(trimmed, (chunk) => {
+          streamBuffer += chunk;
+          const visible = streamBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
           appState.setLiveComponent(
             <Box key="copilot-stream" flexDirection="column">
+              <Text dimColor>{`⏺ ${providerLabel}`}</Text>
               <Markdown>{visible || ' '}</Markdown>
             </Box>,
           );
         });
         appState.setLiveComponent(null);
-        const hasThinking = /<think>[\s\S]*?<\/think>/.test(buffer);
-        const cleaned = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        const hasThinking = /<think>[\s\S]*?<\/think>/.test(rawBuffer);
+        const cleaned = rawBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         if (hasThinking) {
           logDim('  ⟐ thinking collapsed');
         }
-        if (cleaned) {
+        const looksGarbled = /(<\|[a-z_]+\|>|<\|im_|<\|endoftext)/.test(cleaned);
+        if (looksGarbled) {
+          logError(`  The selected model doesn't support this task. Try a more capable model or switch provider with /copilot set.`);
+        } else if (cleaned) {
+          const ctx = await getContextUsageAsync();
           appState.addToChat(
-            <Markdown key={`msg-${appState.getNextKey()}`}>{cleaned}</Markdown>,
+            <Box key={`msg-${appState.getNextKey()}`} flexDirection="column">
+              <Text dimColor>{`⏺ ${providerLabel}  ·  context ${ctx.percent}%`}</Text>
+              <Markdown>{cleaned}</Markdown>
+            </Box>,
           );
+
+          const commands = extractGeinsCommands(cleaned);
+          for (const cmd of commands) {
+            logDim(`  ⟳ running: ${cmd}`);
+            appState.setLiveComponent(
+              <Box key="cmd-spinner" gap={1} paddingX={1}>
+                <Spinner type="dots" />
+                <Text dimColor>{cmd}</Text>
+              </Box>,
+            );
+            const result = await executeGeinsCommand(cmd);
+            appState.setLiveComponent(null);
+            addToolResult(cmd, result.output);
+            if (result.output) {
+              appState.addToChat(
+                <Box key={`cmd-${appState.getNextKey()}`} flexDirection="column">
+                  <Text dimColor>{`  ⟳ ${cmd}`}</Text>
+                  <Markdown>{result.output}</Markdown>
+                </Box>,
+              );
+            }
+          }
+
+          if (commands.length > 0) {
+            appState.setLiveComponent(
+              <ThinkingIndicator key="copilot-followup" />,
+            );
+            let followupBuffer = '';
+            const followupRaw = await chatStream(
+              'Here are the command results. Summarize what you found and answer my original question.',
+              (chunk) => {
+                followupBuffer += chunk;
+                const visible = followupBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+                appState.setLiveComponent(
+                  <Box key="copilot-followup-stream" flexDirection="column">
+                    <Text dimColor>{`⏺ ${providerLabel}`}</Text>
+                    <Markdown>{visible || ' '}</Markdown>
+                  </Box>,
+                );
+              },
+            );
+            appState.setLiveComponent(null);
+            const followupCleaned = followupRaw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            if (followupCleaned) {
+              const ctx2 = await getContextUsageAsync();
+              appState.addToChat(
+                <Box key={`msg-${appState.getNextKey()}`} flexDirection="column">
+                  <Text dimColor>{`⏺ ${providerLabel}  ·  context ${ctx2.percent}%`}</Text>
+                  <Markdown>{followupCleaned}</Markdown>
+                </Box>,
+              );
+            }
+          }
         }
       } catch (err) {
         appState.setLiveComponent(null);
@@ -293,6 +245,9 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /copilot    Toggle AI copilot mode  /copilot set');
+          if (appState.copilotActive) {
+            logText('  /new        New conversation         Clear copilot history');
+          }
           logText('  /theme      Switch dark/light mode');
           logText('  /clear      Clear the screen');
           logText('  /exit       Exit the CLI');
@@ -602,6 +557,7 @@ export function App({ version = VERSION }: { version?: string }) {
           }
           if (appState.copilotActive) {
             appState.setCopilotActive(false);
+            clearConversationHistory();
             logSuccess('  ✓ Copilot mode disabled');
             break;
           }
@@ -620,6 +576,12 @@ export function App({ version = VERSION }: { version?: string }) {
           logSuccess(`  ✓ Switched to ${newTheme} mode`);
           break;
         }
+
+        case 'new':
+          clearConversationHistory();
+          appState.setChatComponents([]);
+          logSuccess('  ✓ New conversation started');
+          break;
 
         case 'clear':
           appState.setChatComponents([]);
@@ -662,7 +624,7 @@ export function App({ version = VERSION }: { version?: string }) {
   const isModal = appState.activeMode !== null;
 
   return (
-    <Box flexDirection="column" height={rows}>
+    <Box flexDirection="column">
       <ChatHistory
         ready={appState.ready}
         welcomeComponent={welcomeComponent}
@@ -690,6 +652,7 @@ export function App({ version = VERSION }: { version?: string }) {
         <SelectCopilot
           onComplete={() => {
             appState.setActiveMode(null);
+            clearConversationHistory();
             appState.setCopilotActive(true);
           }}
           onCancel={() => {
@@ -707,6 +670,7 @@ export function App({ version = VERSION }: { version?: string }) {
           onToggleCopilot={async () => {
             if (appState.copilotActive) {
               appState.setCopilotActive(false);
+              clearConversationHistory();
             } else {
               const existing = await getCopilotConfig();
               if (existing) {

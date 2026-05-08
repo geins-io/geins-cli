@@ -1,7 +1,7 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useWindowSize } from 'ink';
 
-const LOGO = [
+const LOGO_FULL = [
   '██╗     ██╗████████╗██╗██╗   ██╗███╗   ███╗     ██████╗ ██████╗ ██████╗ ███████╗',
   '██║     ██║╚══██╔══╝██║██║   ██║████╗ ████║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
   '██║     ██║   ██║   ██║██║   ██║██╔████╔██║    ██║     ██║   ██║██████╔╝█████╗  ',
@@ -10,7 +10,17 @@ const LOGO = [
   '╚══════╝╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝     ╚═╝     ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝',
 ];
 
+const LOGO_COMPACT = [
+  '██╗      ██████╗ ██████╗ ██████╗ ███████╗',
+  '██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
+  '██║     ██║     ██║   ██║██████╔╝█████╗  ',
+  '██║     ██║     ██║   ██║██╔══██╗██╔══╝  ',
+  '███████╗╚██████╗╚██████╔╝██║  ██║███████╗',
+  '╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝',
+];
+
 const COLORS = ['cyan', 'cyan', '#3b82f6', '#3b82f6', 'green', 'green'] as const;
+const FULL_WIDTH = 86;
 
 interface WelcomeProps {
   version: string;
@@ -19,10 +29,13 @@ interface WelcomeProps {
 }
 
 export function Welcome({ version, user, account }: WelcomeProps) {
+  const { columns } = useWindowSize();
+  const logo = columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
+
   return (
     <Box flexDirection="column" paddingX={2}>
       <Text> </Text>
-      {LOGO.map((line, i) => (
+      {logo.map((line, i) => (
         <Text key={i} color={COLORS[i]}>{`  ${line}`}</Text>
       ))}
       <Text> </Text>
