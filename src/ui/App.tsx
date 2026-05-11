@@ -17,7 +17,8 @@ import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
 import { ThinkingIndicator } from './ThinkingIndicator.tsx';
-import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult } from '../commands/copilot.ts';
+import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, type StreamEvent } from '../commands/copilot.ts';
+import { CopilotActivity, type ActivityEntry } from './CopilotActivity.tsx';
 import {
   startSession,
   logEntry,
@@ -148,16 +149,45 @@ export function App({ version = VERSION }: { version?: string }) {
       );
       try {
         let streamBuffer = '';
-        const rawBuffer = await chatStream(trimmed, (chunk) => {
-          streamBuffer += chunk;
-          const visible = streamBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+        const activityLog: ActivityEntry[] = [];
+
+        const renderActivity = () => {
           appState.setLiveComponent(
-            <Box key="copilot-stream" flexDirection="column">
-              <Text dimColor>{`⏺ ${providerLabel}`}</Text>
-              <Markdown>{visible || ' '}</Markdown>
-            </Box>,
+            <CopilotActivity
+              key="copilot-activity"
+              providerLabel={providerLabel}
+              entries={[...activityLog]}
+              isWorking={true}
+            />,
           );
-        });
+        };
+
+        const handleEvent = (event: StreamEvent) => {
+          if (event.kind === 'tool_start') {
+            activityLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false });
+            renderActivity();
+          } else if (event.kind === 'tool_end') {
+            const last = [...activityLog].reverse().find(e => e.kind === 'tool' && !e.done);
+            if (last) last.done = true;
+            renderActivity();
+          } else if (event.kind === 'text') {
+            // text events update the final answer — handled by onChunk
+          }
+        };
+
+        const rawBuffer = await chatStream(trimmed, (chunk) => {
+          streamBuffer = chunk;
+          const visible = streamBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+          if (visible) {
+            const textIdx = activityLog.findIndex(e => e.kind === 'text');
+            if (textIdx >= 0) {
+              activityLog[textIdx]!.label = visible;
+            } else {
+              activityLog.push({ kind: 'text', label: visible, done: true });
+            }
+            renderActivity();
+          }
+        }, handleEvent);
         appState.setLiveComponent(null);
         const hasThinking = /<think>[\s\S]*?<\/think>/.test(rawBuffer);
         const cleaned = rawBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -168,12 +198,15 @@ export function App({ version = VERSION }: { version?: string }) {
         if (looksGarbled) {
           logError(`  The selected model doesn't support this task. Try a more capable model or switch provider with /copilot set.`);
         } else if (cleaned) {
+          const finalEntries = activityLog.map(e => ({ ...e, done: true }));
           const ctx = await getContextUsageAsync();
           appState.addToChat(
-            <Box key={`msg-${appState.getNextKey()}`} flexDirection="column">
-              <Text dimColor>{`⏺ ${providerLabel}  ·  context ${ctx.percent}%`}</Text>
-              <Markdown>{cleaned}</Markdown>
-            </Box>,
+            <CopilotActivity
+              key={`msg-${appState.getNextKey()}`}
+              providerLabel={`${providerLabel}  ·  context ${ctx.percent}%`}
+              entries={finalEntries}
+              isWorking={false}
+            />,
           );
 
           const commands = extractGeinsCommands(cleaned);
@@ -199,32 +232,58 @@ export function App({ version = VERSION }: { version?: string }) {
           }
 
           if (commands.length > 0) {
-            appState.setLiveComponent(
-              <ThinkingIndicator key="copilot-followup" />,
-            );
-            let followupBuffer = '';
+            const followupLog: ActivityEntry[] = [];
+
+            const renderFollowup = () => {
+              appState.setLiveComponent(
+                <CopilotActivity
+                  key="copilot-followup"
+                  providerLabel={providerLabel}
+                  entries={[...followupLog]}
+                  isWorking={true}
+                />,
+              );
+            };
+
+            renderFollowup();
+
             const followupRaw = await chatStream(
               'Here are the command results. Summarize what you found and answer my original question.',
               (chunk) => {
-                followupBuffer += chunk;
-                const visible = followupBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
-                appState.setLiveComponent(
-                  <Box key="copilot-followup-stream" flexDirection="column">
-                    <Text dimColor>{`⏺ ${providerLabel}`}</Text>
-                    <Markdown>{visible || ' '}</Markdown>
-                  </Box>,
-                );
+                const visible = chunk.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+                if (visible) {
+                  const textIdx = followupLog.findIndex(e => e.kind === 'text');
+                  if (textIdx >= 0) {
+                    followupLog[textIdx]!.label = visible;
+                  } else {
+                    followupLog.push({ kind: 'text', label: visible, done: true });
+                  }
+                  renderFollowup();
+                }
+              },
+              (event) => {
+                if (event.kind === 'tool_start') {
+                  followupLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false });
+                  renderFollowup();
+                } else if (event.kind === 'tool_end') {
+                  const last = [...followupLog].reverse().find(e => e.kind === 'tool' && !e.done);
+                  if (last) last.done = true;
+                  renderFollowup();
+                }
               },
             );
             appState.setLiveComponent(null);
             const followupCleaned = followupRaw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             if (followupCleaned) {
+              const finalFollowup = followupLog.map(e => ({ ...e, done: true }));
               const ctx2 = await getContextUsageAsync();
               appState.addToChat(
-                <Box key={`msg-${appState.getNextKey()}`} flexDirection="column">
-                  <Text dimColor>{`⏺ ${providerLabel}  ·  context ${ctx2.percent}%`}</Text>
-                  <Markdown>{followupCleaned}</Markdown>
-                </Box>,
+                <CopilotActivity
+                  key={`msg-${appState.getNextKey()}`}
+                  providerLabel={`${providerLabel}  ·  context ${ctx2.percent}%`}
+                  entries={finalFollowup}
+                  isWorking={false}
+                />,
               );
             }
           }

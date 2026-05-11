@@ -18,9 +18,17 @@ export interface CopilotOption {
   cli: string;
   testCmd: string[];
   supportsModels?: boolean;
+  supportsStreamJson?: boolean;
   contextWindow: number;
   buildCmd: (model?: string) => string[];
   useStdin: boolean;
+}
+
+export interface StreamEvent {
+  kind: 'tool_start' | 'tool_end' | 'text';
+  toolName?: string;
+  label?: string;
+  text?: string;
 }
 
 export const COPILOT_OPTIONS: CopilotOption[] = [
@@ -29,8 +37,9 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     cli: 'claude',
     testCmd: ['claude', '--version'],
     contextWindow: 200000,
+    supportsStreamJson: true,
     useStdin: true,
-    buildCmd: () => ['claude', '-p'],
+    buildCmd: () => ['claude', '-p', '--output-format', 'stream-json', '--verbose'],
   },
   {
     name: 'OpenAI Codex',
@@ -195,6 +204,30 @@ export async function getContextUsageAsync(): Promise<{ used: number; total: num
   return { used, total, percent };
 }
 
+function extractResultFromStreamJson(output: string): string {
+  const lines = output.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const event = JSON.parse(lines[i]!);
+      if (event.type === 'result' && typeof event.result === 'string') {
+        return event.result;
+      }
+    } catch {}
+  }
+  let lastText = '';
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'assistant' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'text' && block.text) lastText = block.text;
+        }
+      }
+    } catch {}
+  }
+  return lastText;
+}
+
 export async function chat(prompt: string): Promise<string> {
   const config = await getCopilotConfig();
   if (!config) throw new Error('No copilot configured. Run /copilot to set one up.');
@@ -202,8 +235,9 @@ export async function chat(prompt: string): Promise<string> {
   const option = getCopilotOption(config.cli);
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
+  const isStreamJson = option.supportsStreamJson;
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
-  const fullPrompt = await buildFullPrompt(prompt, option);
+  const fullPrompt = isStreamJson ? prompt : await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -224,15 +258,74 @@ export async function chat(prompt: string): Promise<string> {
     throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);
   }
 
-  const cleaned = output.trim();
+  const cleaned = isStreamJson ? extractResultFromStreamJson(output) : output.trim();
   await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
   await processMemoryBlocks(cleaned);
   return cleaned;
 }
 
+interface RawStreamEvent {
+  type: 'tool_use' | 'tool_result' | 'text';
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  text?: string;
+}
+
+function parseStreamJsonLine(line: string): RawStreamEvent | null {
+  try {
+    const event = JSON.parse(line);
+    if (event.type === 'assistant' && event.message?.content) {
+      for (const block of event.message.content) {
+        if (block.type === 'tool_use') {
+          return { type: 'tool_use', toolName: block.name, toolInput: block.input };
+        }
+        if (block.type === 'text' && block.text) {
+          return { type: 'text', text: block.text };
+        }
+      }
+    }
+    if (event.type === 'user' && event.tool_use_result) {
+      return { type: 'tool_result' };
+    }
+    if (event.type === 'result' && typeof event.result === 'string') {
+      return { type: 'text', text: event.result };
+    }
+  } catch {}
+  return null;
+}
+
+function shortenPath(p: string): string {
+  const home = process.env.HOME ?? '';
+  if (home && p.startsWith(home)) return '~' + p.slice(home.length);
+  const cwd = process.cwd();
+  if (p.startsWith(cwd + '/')) return p.slice(cwd.length + 1);
+  return p;
+}
+
+function formatToolLabel(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'Read': return `Read ${shortenPath(String(input.file_path ?? 'file'))}`;
+    case 'Edit': return `Edit ${shortenPath(String(input.file_path ?? 'file'))}`;
+    case 'Write': return `Write ${shortenPath(String(input.file_path ?? 'file'))}`;
+    case 'Bash': {
+      const cmd = typeof input.command === 'string' ? input.command : 'command';
+      const desc = typeof input.description === 'string' ? input.description : null;
+      return desc || cmd.slice(0, 100);
+    }
+    case 'Grep': return `Search for "${input.pattern ?? ''}"`;
+    case 'Glob': return `Find files: ${input.pattern ?? ''}`;
+    case 'WebSearch': return `Search web: ${input.query ?? ''}`;
+    case 'WebFetch': return `Fetch ${input.url ?? ''}`;
+    case 'TodoWrite': return 'Update tasks';
+    case 'Agent': return `Spawn agent: ${input.description ?? input.subagent_type ?? ''}`;
+    default: return name;
+  }
+}
+
 export async function chatStream(
   prompt: string,
   onChunk: (text: string) => void,
+  onEvent?: (event: StreamEvent) => void,
 ): Promise<string> {
   const config = await getCopilotConfig();
   if (!config) throw new Error('No copilot configured. Run /copilot to set one up.');
@@ -241,7 +334,8 @@ export async function chatStream(
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
-  const fullPrompt = await buildFullPrompt(prompt, option);
+  const isStreamJson = option.supportsStreamJson;
+  const fullPrompt = isStreamJson ? prompt : await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -258,12 +352,48 @@ export async function chatStream(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    buffer += chunk;
-    onChunk(chunk);
+  if (isStreamJson) {
+    let lineBuf = '';
+    let lastText = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuf += decoder.decode(value, { stream: true });
+      const lines = lineBuf.split('\n');
+      lineBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const raw = parseStreamJsonLine(line);
+        if (!raw) continue;
+        if (raw.type === 'text' && raw.text) {
+          lastText = raw.text;
+          onChunk(raw.text);
+          onEvent?.({ kind: 'text', text: raw.text });
+        } else if (raw.type === 'tool_use' && raw.toolName) {
+          const label = formatToolLabel(raw.toolName, raw.toolInput ?? {});
+          onEvent?.({ kind: 'tool_start', toolName: raw.toolName, label });
+        } else if (raw.type === 'tool_result') {
+          onEvent?.({ kind: 'tool_end' });
+        }
+      }
+    }
+    if (lineBuf.trim()) {
+      const raw = parseStreamJsonLine(lineBuf);
+      if (raw?.type === 'text' && raw.text) {
+        lastText = raw.text;
+        onChunk(raw.text);
+        onEvent?.({ kind: 'text', text: raw.text });
+      }
+    }
+    buffer = lastText;
+  } else {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+      onChunk(chunk);
+    }
   }
 
   const exitCode = await proc.exited;
