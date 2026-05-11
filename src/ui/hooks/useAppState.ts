@@ -33,6 +33,7 @@ export function useAppState() {
 
   // Copilot mode
   const [copilotActive, setCopilotActive] = useState(false);
+  const [copilotProvider, setCopilotProvider] = useState('');
 
   const getNextKey = useCallback(() => {
     keyCounter.current += 1;
@@ -94,6 +95,8 @@ export function useAppState() {
     setPendingAuth,
     copilotActive,
     setCopilotActive,
+    copilotProvider,
+    setCopilotProvider,
   };
 }
 

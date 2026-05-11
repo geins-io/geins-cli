@@ -55,12 +55,13 @@ const COMMAND_NAMES = Object.keys(COMMANDS);
 interface ChatInputProps {
   disabled?: boolean;
   copilotActive?: boolean;
+  copilotProvider?: string;
   onSubmit: (message: string) => void;
   onCancel?: () => void;
   onToggleCopilot?: () => void;
 }
 
-export function ChatInput({ disabled = false, copilotActive = false, onSubmit, onCancel, onToggleCopilot }: ChatInputProps) {
+export function ChatInput({ disabled = false, copilotActive = false, copilotProvider, onSubmit, onCancel, onToggleCopilot }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [menuIndex, setMenuIndex] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
@@ -192,8 +193,11 @@ export function ChatInput({ disabled = false, copilotActive = false, onSubmit, o
       <Text dimColor>{separator}</Text>
       <Box paddingX={1}>
         <Text color={copilotActive ? 'magenta' : 'cyan'}>
-          {copilotActive ? '⏵⏵ copilot mode on' : '⏵⏵ cli mode on'}
+          {copilotActive ? `⏵⏵ copilot mode on` : '⏵⏵ cli mode on'}
         </Text>
+        {copilotActive && copilotProvider && (
+          <Text dimColor>{` · ${copilotProvider}`}</Text>
+        )}
         <Text dimColor> (shift+tab to cycle)</Text>
       </Box>
     </Box>

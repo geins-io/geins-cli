@@ -92,6 +92,11 @@ function estimateTokens(text: string): number {
 
 const SYSTEM_CONTEXT = [
   'You are an autonomous CLI agent for Geins Commerce Backend.',
+  'EVERYTHING the user asks is in the context of the Geins platform. There is no other context.',
+  'When the user says "workflow", "product", "order", "api", "create", "list", "run", "update",',
+  '"send", "schedule", "trigger", "enable", "disable", or any other action — they mean via Geins.',
+  'Never suggest external tools, scripts, cron jobs, or third-party services when Geins can do it.',
+  '',
   'You DO NOT explain how to run commands — you RUN them by outputting them in ```bash code blocks.',
   'The system will automatically execute any geins command you output in a code block and return the result.',
   '',
@@ -108,10 +113,19 @@ const SYSTEM_CONTEXT = [
   '  geins workflow disable <id>',
   '  geins workflow vars [list|get <name>|set <name> <value>]',
   '',
+  'INTENT MAPPING — always map user intent to Geins operations:',
+  '  "create a workflow" → geins workflow create',
+  '  "send email / notify / alert" → workflow with email action node',
+  '  "every morning / schedule / cron" → scheduled trigger workflow',
+  '  "when X happens / on event" → event trigger workflow',
+  '  "get / fetch / show data" → workflow with API/query action or geins api call',
+  '  "list / show workflows" → geins workflow list',
+  '',
   'RULES:',
   '- ALWAYS output commands in ```bash blocks. Never tell the user to run them manually.',
   '- To create a workflow, output: geins workflow create --body \'<full JSON>\'',
   '- If you need information first (e.g. manifest, existing workflows), run those commands first.',
+  '- ALWAYS fetch the manifest (geins workflow manifest) before creating a workflow — you need it to know available actions, triggers, and node types.',
   '- Global variables in workflows: {{vars.variableName}}',
   '- Keep responses concise. Act, don\'t explain.',
   '- If you learn something notable about this project, workflows, or user preferences, output it as: [MEMORY]category:fact[/MEMORY] where category is one of: project, workflow, api, preference, pattern.',
@@ -237,7 +251,9 @@ export async function chat(prompt: string): Promise<string> {
 
   const isStreamJson = option.supportsStreamJson;
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
-  const fullPrompt = isStreamJson ? prompt : await buildFullPrompt(prompt, option);
+  const fullPrompt = isStreamJson
+    ? `${SYSTEM_CONTEXT}\n\nUser request: ${prompt}`
+    : await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -335,7 +351,9 @@ export async function chatStream(
 
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
   const isStreamJson = option.supportsStreamJson;
-  const fullPrompt = isStreamJson ? prompt : await buildFullPrompt(prompt, option);
+  const fullPrompt = isStreamJson
+    ? `${SYSTEM_CONTEXT}\n\nUser request: ${prompt}`
+    : await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {

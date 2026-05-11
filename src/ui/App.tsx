@@ -679,6 +679,7 @@ export function App({ version = VERSION }: { version?: string }) {
           const existing = await getCopilotConfig();
           if (existing) {
             appState.setCopilotActive(true);
+            appState.setCopilotProvider(existing.model ? `${existing.command} · ${existing.model}` : existing.command);
             logSuccess(`  ✓ Copilot mode enabled (${existing.command})`);
           } else {
             appState.setActiveMode('select-copilot');
@@ -816,10 +817,12 @@ export function App({ version = VERSION }: { version?: string }) {
 
       {appState.activeMode === 'select-copilot' && (
         <SelectCopilot
-          onComplete={() => {
+          onComplete={async () => {
             appState.setActiveMode(null);
             clearConversationHistory();
             appState.setCopilotActive(true);
+            const cfg = await getCopilotConfig();
+            if (cfg) appState.setCopilotProvider(cfg.model ? `${cfg.command} · ${cfg.model}` : cfg.command);
           }}
           onCancel={() => {
             logDim('  Copilot setup cancelled.');
@@ -833,6 +836,7 @@ export function App({ version = VERSION }: { version?: string }) {
         <ChatInput
           onSubmit={handleCommand}
           copilotActive={appState.copilotActive}
+          copilotProvider={appState.copilotProvider}
           onToggleCopilot={async () => {
             if (appState.copilotActive) {
               appState.setCopilotActive(false);
@@ -841,6 +845,7 @@ export function App({ version = VERSION }: { version?: string }) {
               const existing = await getCopilotConfig();
               if (existing) {
                 appState.setCopilotActive(true);
+                appState.setCopilotProvider(existing.model ? `${existing.command} · ${existing.model}` : existing.command);
               } else {
                 appState.setActiveMode('select-copilot');
               }
