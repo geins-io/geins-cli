@@ -19,6 +19,16 @@ import { Markdown } from './Markdown.tsx';
 import { ThinkingIndicator } from './ThinkingIndicator.tsx';
 import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult } from '../commands/copilot.ts';
 import {
+  startSession,
+  logEntry,
+  endSession,
+  trackWorkflow,
+  searchSessions,
+  loadKnowledge,
+  clearKnowledge,
+  clearHistory,
+} from '../memory/index.ts';
+import {
   listWorkflows,
   getWorkflow,
   runWorkflow,
@@ -122,6 +132,8 @@ export function App({ version = VERSION }: { version?: string }) {
     const trimmed = input.trim();
     if (!trimmed) return;
 
+    logEntry({ type: 'command', content: trimmed });
+
     // Copilot mode: non-slash input goes to AI
     if (appState.copilotActive && !trimmed.startsWith('/')) {
       appState.addToChat(
@@ -175,7 +187,7 @@ export function App({ version = VERSION }: { version?: string }) {
             );
             const result = await executeGeinsCommand(cmd);
             appState.setLiveComponent(null);
-            addToolResult(cmd, result.output);
+            await addToolResult(cmd, result.output);
             if (result.output) {
               appState.addToChat(
                 <Box key={`cmd-${appState.getNextKey()}`} flexDirection="column">
@@ -250,6 +262,8 @@ export function App({ version = VERSION }: { version?: string }) {
           if (appState.copilotActive) {
             logText('  /new        New conversation         Clear copilot history');
           }
+          logText('  /history    Search past sessions     /history <query>');
+          logText('  /memory     View learned knowledge   /memory clear');
           logText('  /theme      Switch dark/light mode');
           logText('  /clear      Clear the screen');
           logText('  /exit       Exit the CLI');
@@ -316,6 +330,7 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const wfData = await getWorkflow(id);
               appState.setLiveComponent(null);
+              trackWorkflow(id);
               logText(`  ${JSON.stringify(wfData, null, 2)}`);
               break;
             }
@@ -336,6 +351,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   <Text dimColor>{watch ? 'Starting test run...' : 'Executing workflow...'}</Text>
                 </Box>,
               );
+              trackWorkflow(id);
               const runResult = watch
                 ? await testRunWorkflow(id, input)
                 : await runWorkflow(id, input) as { ExecutionId?: string };
@@ -619,9 +635,60 @@ export function App({ version = VERSION }: { version?: string }) {
 
         case 'new':
           clearConversationHistory();
+          clearHistory();
           appState.setChatComponents([]);
           logSuccess('  ✓ New conversation started');
           break;
+
+        case 'history': {
+          const query = args.join(' ');
+          if (!query) {
+            logText('  Usage: /history <search term>');
+            break;
+          }
+          const results = await searchSessions(query);
+          if (results.length === 0) {
+            logDim('  No matches found');
+            break;
+          }
+          for (const r of results) {
+            logDim(`  Session ${r.sessionId}:`);
+            for (const e of r.entries.slice(0, 5)) {
+              const time = new Date(e.timestamp).toLocaleTimeString();
+              logText(`    [${time}] ${e.type}: ${e.content.slice(0, 120)}`);
+            }
+            if (r.entries.length > 5) logDim(`    ... and ${r.entries.length - 5} more`);
+          }
+          break;
+        }
+
+        case 'memory': {
+          const sub = args[0]?.toLowerCase();
+          if (sub === 'clear') {
+            await clearKnowledge();
+            logSuccess('  ✓ Knowledge base cleared');
+            break;
+          }
+          const kb = await loadKnowledge();
+          if (kb.facts.length === 0 && Object.keys(kb.preferences).length === 0) {
+            logDim('  No learned knowledge yet');
+            break;
+          }
+          if (kb.facts.length > 0) {
+            logText('  Learned facts:');
+            for (const f of kb.facts) {
+              const conf = Math.round(f.confidence * 100);
+              logText(`    [${f.category}] ${f.content} (${conf}%)`);
+            }
+          }
+          if (Object.keys(kb.preferences).length > 0) {
+            logText('  Preferences:');
+            for (const [k, v] of Object.entries(kb.preferences)) {
+              logText(`    ${k}: ${v}`);
+            }
+          }
+          break;
+        }
 
         case 'clear':
           appState.setChatComponents([]);

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { loadSession } from '../../auth/session.ts';
 import { loadConfig, saveConfig } from '../../config/store.ts';
+import { startSession, endSession } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
 export type ActiveMode = 'login' | 'select-account' | 'select-copilot' | null;
@@ -42,7 +43,7 @@ export function useAppState() {
     setChatComponents(prev => [...prev, component]);
   }, []);
 
-  // Load session + config on mount
+  // Load session + config on mount, start memory session
   useEffect(() => {
     Promise.all([loadSession(), loadConfig()]).then(([session, config]) => {
       if (session) {
@@ -51,12 +52,16 @@ export function useAppState() {
           user: session.user.email,
           account: session.accountKey,
         }));
+        startSession(session.accountKey);
+      } else {
+        startSession();
       }
       if (config.theme) {
         setStatus(s => ({ ...s, theme: config.theme! }));
       }
       setReady(true);
     });
+    return () => { endSession(); };
   }, []);
 
   const updateStatus = useCallback((update: Partial<AppStatus>) => {

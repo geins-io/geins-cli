@@ -1,5 +1,17 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
 import { $ } from 'bun';
+import {
+  appendMessage,
+  loadRecentMessages,
+  clearHistory,
+  loadContext,
+  trackApiResponse,
+  buildContextPromptSection,
+  loadKnowledge,
+  buildKnowledgePromptSection,
+  addFact,
+  extractMemoryBlocks,
+} from '../memory/index.ts';
 
 export interface CopilotOption {
   name: string;
@@ -60,14 +72,8 @@ export interface ChatMessage {
   content: string;
 }
 
-const conversationHistory: ChatMessage[] = [];
-
-export function getConversationHistory(): readonly ChatMessage[] {
-  return conversationHistory;
-}
-
 export function clearConversationHistory(): void {
-  conversationHistory.length = 0;
+  clearHistory();
 }
 
 function estimateTokens(text: string): number {
@@ -99,6 +105,7 @@ const SYSTEM_CONTEXT = [
   '- If you need information first (e.g. manifest, existing workflows), run those commands first.',
   '- Global variables in workflows: {{vars.variableName}}',
   '- Keep responses concise. Act, don\'t explain.',
+  '- If you learn something notable about this project, workflows, or user preferences, output it as: [MEMORY]category:fact[/MEMORY] where category is one of: project, workflow, api, preference, pattern.',
 ].join('\n');
 
 function getMaxPromptTokens(option?: CopilotOption): number {
@@ -106,24 +113,28 @@ function getMaxPromptTokens(option?: CopilotOption): number {
   return Math.floor(ctx * 0.75);
 }
 
-function buildFullPrompt(userMessage: string, option?: CopilotOption): string {
+async function buildFullPrompt(userMessage: string, option?: CopilotOption): Promise<string> {
   const maxTokens = getMaxPromptTokens(option);
   const systemTokens = estimateTokens(SYSTEM_CONTEXT);
   const userMsgText = userMessage ? `User: ${userMessage}` : '';
   const userMsgTokens = estimateTokens(userMsgText);
-  let budgetForHistory = maxTokens - systemTokens - userMsgTokens;
 
-  const historyParts: string[] = [];
-  for (let i = conversationHistory.length - 1; i >= 0; i--) {
-    const msg = conversationHistory[i]!;
-    const line = `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`;
-    const tokens = estimateTokens(line);
-    if (budgetForHistory - tokens < 0) break;
-    budgetForHistory -= tokens;
-    historyParts.unshift(line);
-  }
+  const [ctx, kb] = await Promise.all([loadContext(), loadKnowledge()]);
+  const contextSection = buildContextPromptSection(ctx);
+  const knowledgeSection = buildKnowledgePromptSection(kb);
+  const contextTokens = estimateTokens(contextSection);
+  const knowledgeTokens = estimateTokens(knowledgeSection);
 
-  const parts = [SYSTEM_CONTEXT, ...historyParts];
+  const historyBudget = maxTokens - systemTokens - userMsgTokens - contextTokens - knowledgeTokens;
+  const recentMessages = await loadRecentMessages(Math.max(0, historyBudget));
+  const historyParts = recentMessages.map(
+    msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+  );
+
+  const parts = [SYSTEM_CONTEXT];
+  if (knowledgeSection) parts.push(knowledgeSection);
+  if (contextSection) parts.push(contextSection);
+  parts.push(...historyParts);
   if (userMsgText) parts.push(userMsgText);
   return parts.join('\n\n');
 }
@@ -178,7 +189,7 @@ export async function getContextUsageAsync(): Promise<{ used: number; total: num
   const config = await getCopilotConfig();
   const option = config ? getCopilotOption(config.cli) : undefined;
   const total = option?.contextWindow ?? 8000;
-  const fullPrompt = buildFullPrompt('', option);
+  const fullPrompt = await buildFullPrompt('', option);
   const used = estimateTokens(fullPrompt);
   const percent = Math.min(100, Math.round((used / total) * 100));
   return { used, total, percent };
@@ -191,8 +202,8 @@ export async function chat(prompt: string): Promise<string> {
   const option = getCopilotOption(config.cli);
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
-  conversationHistory.push({ role: 'user', content: prompt });
-  const fullPrompt = buildFullPrompt(prompt, option);
+  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
+  const fullPrompt = await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -209,13 +220,13 @@ export async function chat(prompt: string): Promise<string> {
   const exitCode = await proc.exited;
 
   if (exitCode !== 0) {
-    conversationHistory.pop();
     const stderr = await new Response(proc.stderr).text();
     throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);
   }
 
   const cleaned = output.trim();
-  conversationHistory.push({ role: 'assistant', content: cleaned });
+  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
+  await processMemoryBlocks(cleaned);
   return cleaned;
 }
 
@@ -229,8 +240,8 @@ export async function chatStream(
   const option = getCopilotOption(config.cli);
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
-  conversationHistory.push({ role: 'user', content: prompt });
-  const fullPrompt = buildFullPrompt(prompt, option);
+  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
+  const fullPrompt = await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -257,13 +268,13 @@ export async function chatStream(
 
   const exitCode = await proc.exited;
   if (exitCode !== 0) {
-    conversationHistory.pop();
     const stderr = await new Response(proc.stderr).text();
     throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);
   }
 
   const cleaned = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-  conversationHistory.push({ role: 'assistant', content: cleaned });
+  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
+  await processMemoryBlocks(cleaned);
   return buffer;
 }
 
@@ -305,9 +316,20 @@ export async function executeGeinsCommand(command: string): Promise<{ output: st
   return { output: (stdout || stderr).trim(), exitCode };
 }
 
-export function addToolResult(command: string, output: string): void {
-  conversationHistory.push({
-    role: 'user',
-    content: `I ran \`${command}\` and got this output:\n\n${output}`,
-  });
+export async function addToolResult(command: string, output: string): Promise<void> {
+  const content = `I ran \`${command}\` and got this output:\n\n${output}`;
+  await appendMessage({ role: 'user', content });
+  await trackApiResponse(command, output);
+}
+
+async function processMemoryBlocks(text: string): Promise<void> {
+  const blocks = extractMemoryBlocks(text);
+  for (const block of blocks) {
+    await addFact({
+      category: block.category,
+      content: block.content,
+      confidence: 0.7,
+      source: 'copilot',
+    });
+  }
 }
