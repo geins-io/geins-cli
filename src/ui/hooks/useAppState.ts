@@ -4,7 +4,12 @@ import { loadConfig, saveConfig } from '../../config/store.ts';
 import { startSession, endSession, setMemoryAccount } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
-export type ActiveMode = 'login' | 'apikey' | 'select-account' | 'select-copilot' | null;
+export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'select-account' | 'select-copilot' | null;
+
+export interface ApiKeyPicker {
+  names: string[];
+  active: string | null;
+}
 
 export interface AppStatus {
   user: string;
@@ -30,6 +35,9 @@ export function useAppState() {
 
   // Pending auth for multi-account flow
   const [pendingAuth, setPendingAuth] = useState<AuthResponse | null>(null);
+
+  // Profiles for the live-API account picker
+  const [apiKeyPicker, setApiKeyPicker] = useState<ApiKeyPicker | null>(null);
 
   // Copilot mode
   const [copilotActive, setCopilotActive] = useState(false);
@@ -95,6 +103,8 @@ export function useAppState() {
     getNextKey,
     pendingAuth,
     setPendingAuth,
+    apiKeyPicker,
+    setApiKeyPicker,
     copilotActive,
     setCopilotActive,
     copilotProvider,

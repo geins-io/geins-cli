@@ -6,6 +6,7 @@ import { ChatInput } from './ChatInput.tsx';
 import { Welcome } from './Welcome.tsx';
 import { LoginFlow } from './LoginFlow.tsx';
 import { ApiKeyFlow } from './ApiKeyFlow.tsx';
+import { SelectApiKey } from './SelectApiKey.tsx';
 import { SelectAccount } from './SelectAccount.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
@@ -144,6 +145,19 @@ export function App({ version = VERSION }: { version?: string }) {
     logDim('  API credential setup cancelled.');
     appState.setActiveMode(null);
   }, [appState, logDim]);
+
+  const handleApiKeySelect = useCallback(async (name: string) => {
+    appState.setActiveMode(null);
+    appState.setApiKeyPicker(null);
+    await useCredentials(name);
+    resetCredentialsCache();
+    logSuccess(`  ✓ Switched to '${name}'.`);
+  }, [appState, logSuccess]);
+
+  const handleApiKeyPickerCancel = useCallback(() => {
+    appState.setActiveMode(null);
+    appState.setApiKeyPicker(null);
+  }, [appState]);
 
   const handleCommand = useCallback(async (input: string) => {
     const trimmed = input.trim();
@@ -369,7 +383,17 @@ export function App({ version = VERSION }: { version?: string }) {
             }
           } else if (action === 'use') {
             const name = args[1];
-            if (!name) { logError('  Usage: /apikey use <name>'); break; }
+            if (!name) {
+              const store = await loadCredentialsStore();
+              const names = Object.keys(store.profiles);
+              if (names.length === 0) {
+                logDim('  No API credentials. Run /apikey to add an account.');
+              } else {
+                appState.setApiKeyPicker({ names, active: store.active });
+                appState.setActiveMode('select-apikey');
+              }
+              break;
+            }
             if (await useCredentials(name)) {
               resetCredentialsCache();
               logSuccess(`  ✓ Switched to '${name}'.`);
@@ -884,6 +908,15 @@ export function App({ version = VERSION }: { version?: string }) {
         <ApiKeyFlow
           onComplete={handleApiKeyComplete}
           onCancel={handleApiKeyCancel}
+        />
+      )}
+
+      {appState.activeMode === 'select-apikey' && appState.apiKeyPicker && (
+        <SelectApiKey
+          names={appState.apiKeyPicker.names}
+          active={appState.apiKeyPicker.active}
+          onSelect={handleApiKeySelect}
+          onCancel={handleApiKeyPickerCancel}
         />
       )}
 

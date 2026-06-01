@@ -39,7 +39,7 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     vars: 'list | get <name> | set <name> <value>',
   },
   apikey: {
-    use: '<name>',
+    use: '[<name>]  (blank → arrow-key picker)',
     remove: '<name>',
   },
   product: {
