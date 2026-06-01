@@ -129,6 +129,12 @@ export async function loadCredentials(): Promise<ApiCredentials | null> {
   return store.active ? (store.profiles[store.active] ?? null) : null;
 }
 
+/** The credentials for a specific profile by name, or null if unknown. */
+export async function loadCredentialsByName(name: string): Promise<ApiCredentials | null> {
+  const store = await loadCredentialsStore();
+  return store.profiles[name] ?? null;
+}
+
 /** Add (or replace) a profile keyed by its Management API Key and make it active. Returns the profile name. */
 export async function addCredentials(credentials: ApiCredentials): Promise<string> {
   const store = await loadCredentialsStore();

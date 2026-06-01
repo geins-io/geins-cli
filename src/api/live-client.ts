@@ -1,5 +1,5 @@
 import { getMgmtApiUrl, getMerchantApiUrl } from '../config/env.ts';
-import { loadCredentials, type ApiCredentials } from '../config/store.ts';
+import { loadCredentials, loadCredentialsByName, type ApiCredentials } from '../config/store.ts';
 import { ApiError, noCredentials } from './errors.ts';
 
 // Live Geins APIs, authenticated with API User credentials (see ApiCredentials):
@@ -13,12 +13,30 @@ export interface MgmtRequestOptions {
 }
 
 let cachedCredentials: ApiCredentials | null = null;
+let profileOverride: string | null = null;
+
+/**
+ * Force a specific credentials profile (by name) for this process instead of the
+ * stored active one. Used by the headless `--account <name>` flag / GEINS_ACCOUNT.
+ * Pass null to clear the override.
+ */
+export function setProfileOverride(name: string | null): void {
+  profileOverride = name;
+  cachedCredentials = null;
+}
 
 async function getCredentials(): Promise<ApiCredentials> {
   if (!cachedCredentials) {
-    cachedCredentials = await loadCredentials();
+    cachedCredentials = profileOverride
+      ? await loadCredentialsByName(profileOverride)
+      : await loadCredentials();
   }
-  if (!cachedCredentials) noCredentials();
+  if (!cachedCredentials) {
+    if (profileOverride) {
+      throw new Error(`Unknown API account '${profileOverride}'. Run 'geins apikey list' to see available accounts.`);
+    }
+    noCredentials();
+  }
   return cachedCredentials;
 }
 

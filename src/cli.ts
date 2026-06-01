@@ -8,7 +8,7 @@ import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
 import { getProduct, productName } from './commands/products.ts';
-import { validateManagementApi, validateMerchantApi } from './api/live-client.ts';
+import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -50,7 +50,21 @@ export async function run(argv: string[]): Promise<void> {
   await app.waitUntilExit();
 }
 
-async function runDirect(args: string[]): Promise<void> {
+async function runDirect(rawArgs: string[]): Promise<void> {
+  // Global --account / --profile override (selects which live-API account to use).
+  // Stripped out before command parsing so it can appear anywhere on the line.
+  let accountOverride = process.env['GEINS_ACCOUNT'];
+  const args: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if ((rawArgs[i] === '--account' || rawArgs[i] === '--profile') && rawArgs[i + 1]) {
+      accountOverride = rawArgs[i + 1];
+      i++;
+      continue;
+    }
+    args.push(rawArgs[i]!);
+  }
+  if (accountOverride) setProfileOverride(accountOverride);
+
   if (args[0] === '--help' || args[0] === 'help') {
     console.log(`geins v${VERSION}`);
     console.log('CLI for Geins Commerce Backend\n');
@@ -65,6 +79,7 @@ async function runDirect(args: string[]): Promise<void> {
     console.log('  product    Product commands (get) — uses live Management API');
     console.log('  api       Raw API request\n');
     console.log('Global flags:');
+    console.log('  --account <name>   Use a specific live-API account (or set GEINS_ACCOUNT)');
     console.log('  --json      Force JSON output');
     console.log('  --help      Show help');
     console.log('  --version   Show version');
