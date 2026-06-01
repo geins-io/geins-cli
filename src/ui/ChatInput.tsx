@@ -7,6 +7,7 @@ const COMMANDS: Record<string, string> = {
   login: 'Authenticate with Geins',
   logout: 'Clear credentials',
   whoami: 'Show current user',
+  apikey: 'Set Geins API credentials',
   workflow: 'Workflow commands',
   product: 'Product commands',
   copilot: 'Toggle AI copilot mode',
@@ -20,6 +21,7 @@ const COMMANDS: Record<string, string> = {
 
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
+  apikey: ['add', 'list', 'use', 'remove', 'clear'],
   product: ['get', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   copilot: ['set'],
@@ -35,6 +37,10 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     enable: '<id>',
     disable: '<id>',
     vars: 'list | get <name> | set <name> <value>',
+  },
+  apikey: {
+    use: '<name>',
+    remove: '<name>',
   },
   product: {
     get: '<id>',

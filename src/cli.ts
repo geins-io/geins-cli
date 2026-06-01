@@ -1,13 +1,14 @@
 import React from 'react';
 import { render } from 'ink';
 import { App } from './ui/App.tsx';
-import { loadConfig } from './config/store.ts';
+import { loadConfig, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from './config/store.ts';
 import { request } from './api/client.ts';
 import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct } from './commands/products.ts';
+import { getProduct, productName } from './commands/products.ts';
+import { validateManagementApi, validateMerchantApi } from './api/live-client.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -56,11 +57,12 @@ async function runDirect(args: string[]): Promise<void> {
     console.log('Usage: geins <command> [args] [flags]');
     console.log('       geins (interactive mode)\n');
     console.log('Commands:');
-    console.log('  login     Authenticate with Geins Management API');
+    console.log('  login     Authenticate with Geins (v2 session)');
     console.log('  logout    Clear stored credentials');
     console.log('  whoami    Show current user and account');
+    console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
-    console.log('  product    Product commands (get)');
+    console.log('  product    Product commands (get) — uses live Management API');
     console.log('  api       Raw API request\n');
     console.log('Global flags:');
     console.log('  --json      Force JSON output');
@@ -310,6 +312,97 @@ async function runDirect(args: string[]): Promise<void> {
         }
         break;
       }
+      case 'apikey': {
+        const sub = commandArgs[0]?.toLowerCase() ?? 'status';
+
+        function flag(name: string): string | undefined {
+          const idx = commandArgs.indexOf(name);
+          return idx !== -1 ? commandArgs[idx + 1] : undefined;
+        }
+
+        switch (sub) {
+          case 'set': {
+            const credentials: ApiCredentials = {
+              username: flag('--username') ?? process.env['GEINS_API_USERNAME'] ?? '',
+              managementApiKey: flag('--mgmt-key') ?? process.env['GEINS_MGMT_API_KEY'] ?? '',
+              managementApiPassword: flag('--mgmt-password') ?? process.env['GEINS_MGMT_API_PASSWORD'] ?? '',
+              merchantApiKey: flag('--merchant-key') ?? process.env['GEINS_MERCHANT_API_KEY'] ?? '',
+            };
+            const missing = Object.entries(credentials).filter(([, v]) => !v).map(([k]) => k);
+            if (missing.length > 0) {
+              console.error('Usage: geins apikey set --username <u> --mgmt-key <k> --mgmt-password <p> --merchant-key <k>');
+              console.error('(or set GEINS_API_USERNAME, GEINS_MGMT_API_KEY, GEINS_MGMT_API_PASSWORD, GEINS_MERCHANT_API_KEY)');
+              console.error(`Missing: ${missing.join(', ')}`);
+              process.exit(1);
+            }
+            const [mgmtErr, merchantErr] = await Promise.all([
+              validateManagementApi(credentials).then(() => null).catch((e) => formatError(e)),
+              validateMerchantApi(credentials).then(() => null).catch((e) => formatError(e)),
+            ]);
+            console.log(`${mgmtErr ? '✗' : '✓'} Management API${mgmtErr ? `: ${mgmtErr}` : ''}`);
+            console.log(`${merchantErr ? '✗' : '✓'} Merchant API${merchantErr ? `: ${merchantErr}` : ''}`);
+            if (mgmtErr || merchantErr) {
+              console.error('Validation failed. Credentials not saved.');
+              process.exit(1);
+            }
+            const name = await addCredentials(credentials);
+            console.log(`✓ Credentials '${name}' saved and activated.`);
+            break;
+          }
+          case 'list':
+          case 'status': {
+            const store = await loadCredentialsStore();
+            const names = Object.keys(store.profiles);
+            if (names.length === 0) {
+              console.error('No API credentials. Run geins apikey set to add an account.');
+              process.exit(2);
+            }
+            for (const profileName of names) {
+              const marker = profileName === store.active ? '●' : '○';
+              console.log(`${marker} ${profileName}  (user: ${store.profiles[profileName]!.username})`);
+            }
+            break;
+          }
+          case 'use': {
+            const name = commandArgs[1];
+            if (!name) {
+              console.error('Usage: geins apikey use <name>');
+              process.exit(1);
+            }
+            if (await useCredentials(name)) {
+              console.log(`✓ Switched to '${name}'.`);
+            } else {
+              console.error(`Unknown credentials profile: ${name}`);
+              process.exit(1);
+            }
+            break;
+          }
+          case 'remove': {
+            const name = commandArgs[1];
+            if (!name) {
+              console.error('Usage: geins apikey remove <name>');
+              process.exit(1);
+            }
+            if (await removeCredentials(name)) {
+              console.log(`✓ Removed '${name}'.`);
+            } else {
+              console.error(`Unknown credentials profile: ${name}`);
+              process.exit(1);
+            }
+            break;
+          }
+          case 'clear': {
+            await clearCredentials();
+            console.log('✓ All API credentials cleared.');
+            break;
+          }
+          default:
+            console.error(`Unknown subcommand: apikey ${sub}`);
+            console.error('Subcommands: set, list, use <name>, remove <name>, clear');
+            process.exit(1);
+        }
+        break;
+      }
       case 'product': {
         const sub = commandArgs[0]?.toLowerCase() ?? '';
         const subArgs = commandArgs.slice(1);
@@ -326,13 +419,13 @@ async function runDirect(args: string[]): Promise<void> {
             if (jsonMode) {
               console.log(JSON.stringify(product, null, 2));
             } else {
-              const status = product.active ? '●' : '○';
-              console.log(`${status} ${product.name.trim()}  (${product._id})`);
-              if (product.articleNumber) console.log(`  Article: ${product.articleNumber}`);
-              console.log(`  Price: ${product.purchasePrice} ${product.purchasePriceCurrency}`);
-              if (product.brand) console.log(`  Brand: ${product.brand._id}`);
-              console.log(`  Category: ${product.mainCategoryId}`);
-              console.log(`  Updated: ${product.dateUpdated}`);
+              const status = product.Active ? '●' : '○';
+              console.log(`${status} ${productName(product)}  (${product.ProductId})`);
+              if (product.ArticleNumber) console.log(`  Article: ${product.ArticleNumber}`);
+              if (product.PurchasePrice != null) console.log(`  Price: ${product.PurchasePrice} ${product.PurchasePriceCurrency ?? ''}`.trimEnd());
+              if (product.BrandName) console.log(`  Brand: ${product.BrandName}`);
+              if (product.MainCategoryId != null) console.log(`  Category: ${product.MainCategoryId}`);
+              if (product.DateUpdated) console.log(`  Updated: ${product.DateUpdated}`);
             }
             break;
           }

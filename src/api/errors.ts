@@ -28,7 +28,7 @@ export class ApiError extends Error {
 }
 
 export function formatError(err: unknown): string {
-  if (err instanceof NotLoggedInError) {
+  if (err instanceof NotLoggedInError || err instanceof NoCredentialsError) {
     return yellow(err.message);
   }
 
@@ -64,12 +64,23 @@ export class NotLoggedInError extends Error {
   }
 }
 
+export class NoCredentialsError extends Error {
+  constructor() {
+    super('No API credentials. Run /apikey to add your Geins API User credentials.');
+    this.name = 'NoCredentialsError';
+  }
+}
+
 export function exitWithError(err: unknown): never {
   console.error(formatError(err));
-  const code = err instanceof AuthError || err instanceof NotLoggedInError ? 2 : 1;
+  const code = err instanceof AuthError || err instanceof NotLoggedInError || err instanceof NoCredentialsError ? 2 : 1;
   process.exit(code);
 }
 
 export function notLoggedIn(): never {
   throw new NotLoggedInError();
+}
+
+export function noCredentials(): never {
+  throw new NoCredentialsError();
 }

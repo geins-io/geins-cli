@@ -5,10 +5,12 @@ import { ChatHistory } from './ChatHistory.tsx';
 import { ChatInput } from './ChatInput.tsx';
 import { Welcome } from './Welcome.tsx';
 import { LoginFlow } from './LoginFlow.tsx';
+import { ApiKeyFlow } from './ApiKeyFlow.tsx';
 import { SelectAccount } from './SelectAccount.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
-import { saveSession } from '../config/store.ts';
+import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from '../config/store.ts';
+import { resetCredentialsCache } from '../api/live-client.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request } from '../api/client.ts';
@@ -45,7 +47,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct } from '../commands/products.ts';
+import { getProduct, productName } from '../commands/products.ts';
 
 const VERSION = '0.1.0';
 
@@ -129,6 +131,18 @@ export function App({ version = VERSION }: { version?: string }) {
     logDim('  Login cancelled.');
     appState.setActiveMode(null);
     appState.setLiveComponent(null);
+  }, [appState, logDim]);
+
+  const handleApiKeyComplete = useCallback(async (credentials: ApiCredentials) => {
+    const name = await addCredentials(credentials);
+    resetCredentialsCache();
+    appState.setActiveMode(null);
+    logSuccess(`  ✓ Credentials '${name}' saved, validated, and activated.`);
+  }, [appState, logSuccess]);
+
+  const handleApiKeyCancel = useCallback(() => {
+    logDim('  API credential setup cancelled.');
+    appState.setActiveMode(null);
   }, [appState, logDim]);
 
   const handleCommand = useCallback(async (input: string) => {
@@ -316,6 +330,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /login      Authenticate with Geins');
           logText('  /logout     Clear credentials and exit');
           logText('  /whoami     Show current user');
+          logText('  /apikey     Manage API accounts         /apikey list | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id>');
           logText('  /api        Raw API request         /api GET /products');
@@ -335,6 +350,51 @@ export function App({ version = VERSION }: { version?: string }) {
         case 'login':
           appState.setActiveMode('login');
           break;
+
+        case 'apikey': {
+          const action = args[0]?.toLowerCase() ?? '';
+          if (action === 'add' || action === '') {
+            appState.setActiveMode('apikey');
+          } else if (action === 'list' || action === 'status') {
+            const store = await loadCredentialsStore();
+            const names = Object.keys(store.profiles);
+            if (names.length === 0) {
+              logDim('  No API credentials. Run /apikey to add an account.');
+            } else {
+              for (const name of names) {
+                const marker = name === store.active ? '●' : '○';
+                logText(`  ${marker} ${name}  (user: ${store.profiles[name]!.username})`);
+              }
+              logDim('  ● = active. Switch with /apikey use <name>.');
+            }
+          } else if (action === 'use') {
+            const name = args[1];
+            if (!name) { logError('  Usage: /apikey use <name>'); break; }
+            if (await useCredentials(name)) {
+              resetCredentialsCache();
+              logSuccess(`  ✓ Switched to '${name}'.`);
+            } else {
+              logError(`  Unknown credentials profile: ${name}`);
+            }
+          } else if (action === 'remove') {
+            const name = args[1];
+            if (!name) { logError('  Usage: /apikey remove <name>'); break; }
+            if (await removeCredentials(name)) {
+              resetCredentialsCache();
+              logSuccess(`  ✓ Removed '${name}'.`);
+            } else {
+              logError(`  Unknown credentials profile: ${name}`);
+            }
+          } else if (action === 'clear') {
+            await clearCredentials();
+            resetCredentialsCache();
+            logSuccess('  ✓ All API credentials cleared.');
+          } else {
+            logError(`  Unknown subcommand: apikey ${action}`);
+            logDim('  Subcommands: add, list, use <name>, remove <name>, clear');
+          }
+          break;
+        }
 
         case 'logout':
           await clearSession();
@@ -611,12 +671,12 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const product = await getProduct(id);
               appState.setLiveComponent(null);
-              const status = product.active ? '●' : '○';
-              logText(`  ${status} ${product.name.trim()}  (${product._id})`);
-              if (product.articleNumber) logText(`    Article: ${product.articleNumber}`);
-              logText(`    Price: ${product.purchasePrice} ${product.purchasePriceCurrency}`);
-              if (product.brand) logText(`    Brand: ${product.brand._id}`);
-              logText(`    Category: ${product.mainCategoryId}`);
+              const status = product.Active ? '●' : '○';
+              logText(`  ${status} ${productName(product)}  (${product.ProductId})`);
+              if (product.ArticleNumber) logText(`    Article: ${product.ArticleNumber}`);
+              if (product.PurchasePrice != null) logText(`    Price: ${product.PurchasePrice} ${product.PurchasePriceCurrency ?? ''}`.trimEnd());
+              if (product.BrandName) logText(`    Brand: ${product.BrandName}`);
+              if (product.MainCategoryId != null) logText(`    Category: ${product.MainCategoryId}`);
               break;
             }
             case 'help':
@@ -817,6 +877,13 @@ export function App({ version = VERSION }: { version?: string }) {
           onComplete={handleLoginComplete}
           onCancel={handleLoginCancel}
           onLog={(text) => logText(`  ${text}`)}
+        />
+      )}
+
+      {appState.activeMode === 'apikey' && (
+        <ApiKeyFlow
+          onComplete={handleApiKeyComplete}
+          onCancel={handleApiKeyCancel}
         />
       )}
 

@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 const CONFIG_DIR = join(homedir(), '.config', 'geins');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const SESSION_PATH = join(CONFIG_DIR, 'session.json');
+const CREDENTIALS_PATH = join(CONFIG_DIR, 'credentials.json');
 
 export interface CopilotConfig {
   cli: string;
@@ -31,6 +32,19 @@ export interface StoredSession {
     name: string;
     roles: string[];
   };
+}
+
+/**
+ * Geins API User credentials, as issued in Merchant Center (Settings → API Users).
+ * One API user carries credentials for both live APIs:
+ *   - Management API (REST): Basic Auth (username + managementApiPassword) + X-ApiKey (managementApiKey)
+ *   - Merchant API (GraphQL): X-ApiKey (merchantApiKey)
+ */
+export interface ApiCredentials {
+  username: string;
+  managementApiPassword: string;
+  managementApiKey: string;
+  merchantApiKey: string;
 }
 
 async function ensureDir(): Promise<void> {
@@ -70,6 +84,86 @@ export async function saveSession(session: StoredSession): Promise<void> {
 export async function clearSession(): Promise<void> {
   try {
     await unlink(SESSION_PATH);
+  } catch {
+    // Already gone
+  }
+}
+
+/**
+ * Multiple live-API credential profiles. The live APIs are single-account (unlike
+ * the v2 session), so each profile is one account's API User. Profiles are keyed by
+ * their Management API Key (e.g. "prod-elproman"), and one is active at a time.
+ */
+export interface CredentialsStore {
+  active: string | null;
+  profiles: Record<string, ApiCredentials>;
+}
+
+function isCredentialsStore(value: unknown): value is CredentialsStore {
+  return typeof value === 'object' && value !== null && 'profiles' in value;
+}
+
+export async function loadCredentialsStore(): Promise<CredentialsStore> {
+  const raw = await readJson<unknown>(CREDENTIALS_PATH);
+  if (raw === null) {
+    return { active: null, profiles: {} };
+  }
+  if (isCredentialsStore(raw)) {
+    return raw;
+  }
+  // Migrate the legacy single-profile format (a bare ApiCredentials object).
+  const legacy = raw as ApiCredentials;
+  if (legacy.managementApiKey) {
+    return { active: legacy.managementApiKey, profiles: { [legacy.managementApiKey]: legacy } };
+  }
+  return { active: null, profiles: {} };
+}
+
+async function saveCredentialsStore(store: CredentialsStore): Promise<void> {
+  await writeJson(CREDENTIALS_PATH, store);
+}
+
+/** The credentials for the active profile, or null if none. */
+export async function loadCredentials(): Promise<ApiCredentials | null> {
+  const store = await loadCredentialsStore();
+  return store.active ? (store.profiles[store.active] ?? null) : null;
+}
+
+/** Add (or replace) a profile keyed by its Management API Key and make it active. Returns the profile name. */
+export async function addCredentials(credentials: ApiCredentials): Promise<string> {
+  const store = await loadCredentialsStore();
+  const name = credentials.managementApiKey;
+  store.profiles[name] = credentials;
+  store.active = name;
+  await saveCredentialsStore(store);
+  return name;
+}
+
+/** Switch the active profile. Returns false if the name is unknown. */
+export async function useCredentials(name: string): Promise<boolean> {
+  const store = await loadCredentialsStore();
+  if (!store.profiles[name]) return false;
+  store.active = name;
+  await saveCredentialsStore(store);
+  return true;
+}
+
+/** Remove a single profile. If it was active, the active pointer moves to any remaining profile. */
+export async function removeCredentials(name: string): Promise<boolean> {
+  const store = await loadCredentialsStore();
+  if (!store.profiles[name]) return false;
+  delete store.profiles[name];
+  if (store.active === name) {
+    store.active = Object.keys(store.profiles)[0] ?? null;
+  }
+  await saveCredentialsStore(store);
+  return true;
+}
+
+/** Remove all profiles. */
+export async function clearCredentials(): Promise<void> {
+  try {
+    await unlink(CREDENTIALS_PATH);
   } catch {
     // Already gone
   }
