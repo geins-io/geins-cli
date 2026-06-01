@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import {
@@ -34,8 +34,10 @@ const PRODUCT_HELP = [
   'geins product — query the product catalog (Management API)',
   '',
   'Subcommands:',
-  '  get <id> [--idtype <0-3>] [--json]   Show one product (id is the internal id by default)',
-  '  list [filters] [--json]              Query products (alias: query); defaults to page 1',
+  '  get <id> [--idtype <0-3>] [--json]        Show one product (id is the internal id by default)',
+  '  list [filters] [--json]                   Query products (alias: query); defaults to page 1',
+  '  items <id> [--idtype <0-3>] [--json]      List a product\'s items (SKUs of one product)',
+  '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
   '',
   'list / query filters (repeatable flags accumulate):',
   '  --brand <id>                 Brand id',
@@ -54,6 +56,8 @@ const PRODUCT_HELP = [
   '',
   'Examples:',
   '  geins product get 10001 --json',
+  '  geins product items 10001',
+  '  geins product variants 10001',
   '  geins product list --brand 1 --in-stock',
   '  geins product list --page 2 --batch <BatchId> --json',
   '  geins product list --account prod-elproman   # pick a live-API account (headless)',
@@ -115,7 +119,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  whoami    Show current user and account');
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
-    console.log('  product    Product commands (get, list) — uses Management API');
+    console.log('  product    Product commands (get, list, items, variants) — uses Management API');
     console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped\n');
@@ -493,6 +497,70 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               if (product.BrandName) console.log(`  Brand: ${product.BrandName}`);
               if (product.MainCategoryId != null) console.log(`  Category: ${product.MainCategoryId}`);
               if (product.DateUpdated) console.log(`  Updated: ${product.DateUpdated}`);
+            }
+            break;
+          }
+          case 'items': {
+            const id = subArgs[0];
+            if (!id) {
+              console.error('Usage: geins product items <productId> [--idtype <0-3>] [--json]');
+              process.exit(1);
+            }
+            let idType: ProductIdType | undefined;
+            const itIdx = subArgs.indexOf('--idtype');
+            if (itIdx !== -1 && subArgs[itIdx + 1] != null) {
+              const n = Number(subArgs[itIdx + 1]);
+              if (n >= 0 && n <= 3) idType = n as ProductIdType;
+            }
+            const items = await getProductItems(id, { idType });
+            if (jsonMode) {
+              console.log(JSON.stringify(items, null, 2));
+              break;
+            }
+            for (const it of items) {
+              const status = it.Active ? '●' : '○';
+              const stock = it.Stock?.StockSellable ?? it.Stock?.Stock;
+              const article = it.ArticleNumber ? `  ${it.ArticleNumber}` : '';
+              const stockStr = stock != null ? `  stock ${stock}` : '';
+              console.log(`${status} ${productItemName(it)}  (${it.ItemId})${article}${stockStr}`);
+            }
+            console.log(`\n${items.length} item${items.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'variants': {
+            const id = subArgs[0];
+            if (!id) {
+              console.error('Usage: geins product variants <productId> [--idtype <0-3>] [--json]');
+              process.exit(1);
+            }
+            let idType: ProductIdType | undefined;
+            const itIdx = subArgs.indexOf('--idtype');
+            if (itIdx !== -1 && subArgs[itIdx + 1] != null) {
+              const n = Number(subArgs[itIdx + 1]);
+              if (n >= 0 && n <= 3) idType = n as ProductIdType;
+            }
+            const group = await getVariantGroup(id, { idType });
+            if (jsonMode) {
+              console.log(JSON.stringify(group, null, 2));
+              break;
+            }
+            if (!group) {
+              console.log('No variant group for this product.');
+              break;
+            }
+            console.log(`Variant group ${group.GroupId}${group.Name ? ` (${group.Name})` : ''}`);
+            const members = group.Products ?? [];
+            if (members.length > 0) {
+              for (const p of members) {
+                const status = p.Active ? '●' : '○';
+                const main = p.ProductId === group.MainProductId ? ' ★' : '';
+                const dims = variantSummary(p);
+                console.log(`${status} ${productName(p)}  (${p.ProductId})${main}${dims ? `  ${dims}` : ''}`);
+              }
+              console.log(`\n${members.length} product${members.length === 1 ? '' : 's'} in group`);
+            } else if (group.ProductIds?.length) {
+              console.log(`Products: ${group.ProductIds.join(', ')}`);
+              if (group.MainProductId) console.log(`Main product: ${group.MainProductId}`);
             }
             break;
           }

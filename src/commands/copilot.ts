@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
+import { getOutputDir, ensureOutputDir } from '../output/sink.ts';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -115,6 +116,19 @@ const SYSTEM_CONTEXT = [
   '  geins workflow enable <id>',
   '  geins workflow disable <id>',
   '  geins workflow vars [list|get <name>|set <name> <value>]',
+  '  geins product [get <id> | list [filters]]',
+  '  geins management <METHOD> <path> [--body \'<json>\']',
+  '  geins output [<dir> | status | off]',
+  '',
+  'FILE OUTPUT:',
+  '- Your working directory IS the output folder shown below as "Output folder:". Write ALL files you',
+  '  create there — a relative path like "products.csv" lands in it. Do not write files elsewhere.',
+  '- That folder is either a fixed one set via `geins output <dir>`, or the directory geins was launched',
+  '  from. geins command responses are also auto-dumped there as raw JSON.',
+  '- geins only emits JSON. For derived formats (CSV, Markdown, a summary, a filtered subset), fetch with',
+  '  the relevant geins command using --json, then USE YOUR OWN file tools (Bash, Write) to build the file.',
+  '- Example (CSV of products): run `geins product list --json`, parse it, and Write "products.csv"',
+  '  (a header row + one row per product) into the output folder.',
   '',
   'INTENT MAPPING — always map user intent to Geins operations:',
   '  "create a workflow" → geins workflow create',
@@ -131,6 +145,7 @@ const SYSTEM_CONTEXT = [
   '- ALWAYS fetch the manifest (geins workflow manifest) before creating a workflow — you need it to know available actions, triggers, and node types.',
   '- Global variables in workflows: {{vars.variableName}}',
   '- Keep responses concise. Act, don\'t explain.',
+  '- Write any files you create into the output folder (your working directory) — see FILE OUTPUT.',
   '- If you learn something notable about this project, workflows, or user preferences, output it as: [MEMORY]category:fact[/MEMORY] where category is one of: project, workflow, api, preference, pattern.',
 ].join('\n');
 
@@ -165,7 +180,13 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
     msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
   );
 
-  const parts = [SYSTEM_CONTEXT];
+  const outDir = await getOutputDir();
+  const effectiveDir = outDir ?? process.cwd();
+  const outputSection = outDir
+    ? `Output folder: ${effectiveDir}`
+    : `Output folder: ${effectiveDir} (the directory geins was launched from; set a fixed one with \`geins output <dir>\`)`;
+
+  const parts = [SYSTEM_CONTEXT, outputSection];
   if (knowledgeSection) parts.push(knowledgeSection);
   if (manifestSection) parts.push(manifestSection);
   if (apiRefSection) parts.push(apiRefSection);
@@ -255,6 +276,19 @@ function extractResultFromStreamJson(output: string): string {
   return lastText;
 }
 
+/**
+ * Run the copilot inside the configured output folder so any file it writes lands
+ * there by default, and propagate the absolute output dir to geins subprocesses it
+ * runs (so their dumps are written to the same place, not re-resolved relatively).
+ */
+async function copilotProcOptions(): Promise<{ cwd: string; env: Record<string, string | undefined> }> {
+  const outDir = await ensureOutputDir();
+  return {
+    cwd: outDir ?? process.cwd(),
+    env: outDir ? { ...process.env, GEINS_OUTPUT_DIR: outDir } : { ...process.env },
+  };
+}
+
 export async function chat(prompt: string): Promise<string> {
   const config = await getCopilotConfig();
   if (!config) throw new Error('No copilot configured. Run /copilot to set one up.');
@@ -264,16 +298,18 @@ export async function chat(prompt: string): Promise<string> {
 
   const isStreamJson = option.supportsStreamJson;
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
-  const fullPrompt = isStreamJson
-    ? `${SYSTEM_CONTEXT}\n\nUser request: ${prompt}`
-    : await buildFullPrompt(prompt, option);
+  // Always include conversation history: each copilot invocation is a stateless
+  // one-shot spawn (e.g. `claude -p`), so prior turns and tool results only reach
+  // the model if they're in the prompt. Omitting them broke multi-step flows where
+  // a follow-up references "the command results" / "my original question".
+  const fullPrompt = await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'pipe',
-    cwd: process.cwd(),
+    ...(await copilotProcOptions()),
   });
 
   proc.stdin.write(fullPrompt);
@@ -364,16 +400,18 @@ export async function chatStream(
 
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
   const isStreamJson = option.supportsStreamJson;
-  const fullPrompt = isStreamJson
-    ? `${SYSTEM_CONTEXT}\n\nUser request: ${prompt}`
-    : await buildFullPrompt(prompt, option);
+  // Always include conversation history: each copilot invocation is a stateless
+  // one-shot spawn (e.g. `claude -p`), so prior turns and tool results only reach
+  // the model if they're in the prompt. Omitting them broke multi-step flows where
+  // a follow-up references "the command results" / "my original question".
+  const fullPrompt = await buildFullPrompt(prompt, option);
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'pipe',
-    cwd: process.cwd(),
+    ...(await copilotProcOptions()),
   });
 
   proc.stdin.write(fullPrompt);

@@ -49,7 +49,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
@@ -348,7 +348,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /whoami     Show current user');
           logText('  /apikey     Manage API accounts         /apikey list | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
-          logText('  /product    Product commands        /product get <id> | list');
+          logText('  /product    Product commands        /product get <id> | list | items <id> | variants <id>');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /management Management API           /management GET /API/Market/List');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
@@ -732,11 +732,63 @@ export function App({ version = VERSION }: { version?: string }) {
               }
               break;
             }
+            case 'items': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /product items <productId>'); break; }
+              appState.setLiveComponent(
+                <Box key="product-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Fetching items of {id}...</Text>
+                </Box>,
+              );
+              const items = await getProductItems(id);
+              appState.setLiveComponent(null);
+              if (items.length === 0) { logDim('  No items.'); break; }
+              for (const it of items) {
+                const status = it.Active ? '●' : '○';
+                const stock = it.Stock?.StockSellable ?? it.Stock?.Stock;
+                const article = it.ArticleNumber ? `  ${it.ArticleNumber}` : '';
+                const stockStr = stock != null ? `  stock ${stock}` : '';
+                logText(`  ${status} ${productItemName(it)}${article}${stockStr}`);
+              }
+              logDim(`  ${items.length} item${items.length === 1 ? '' : 's'}`);
+              break;
+            }
+            case 'variants': {
+              const id = args[1];
+              if (!id) { logError('  Usage: /product variants <productId>'); break; }
+              appState.setLiveComponent(
+                <Box key="product-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Fetching variant group of {id}...</Text>
+                </Box>,
+              );
+              const group = await getVariantGroup(id);
+              appState.setLiveComponent(null);
+              if (!group) { logDim('  No variant group for this product.'); break; }
+              logText(`  Variant group ${group.GroupId}${group.Name ? ` (${group.Name})` : ''}`);
+              const members = group.Products ?? [];
+              if (members.length > 0) {
+                for (const p of members) {
+                  const status = p.Active ? '●' : '○';
+                  const main = p.ProductId === group.MainProductId ? ' ★' : '';
+                  const dims = variantSummary(p);
+                  logText(`  ${status} ${productName(p)}${main}${dims ? `  ${dims}` : ''}`);
+                }
+                logDim(`  ${members.length} product${members.length === 1 ? '' : 's'} in group`);
+              } else if (group.ProductIds?.length) {
+                logText(`  Products: ${group.ProductIds.join(', ')}`);
+                if (group.MainProductId) logDim(`  Main product: ${group.MainProductId}`);
+              }
+              break;
+            }
             case 'help':
               logText('');
-              logText('  /product get <id>    Show product details');
-              logText('  /product list        Query products (filters below)');
+              logText('  /product get <id>        Show product details');
+              logText('  /product list            Query products (filters below)');
               logText('    --brand <id> --category <id> --article <n> --sellable --in-stock --page <n>');
+              logText('  /product items <id>      List a product\'s items (SKUs)');
+              logText('  /product variants <id>   Show the product\'s variant group (sibling products)');
               logText('');
               break;
             default:

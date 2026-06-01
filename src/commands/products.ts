@@ -1,8 +1,47 @@
 import { mgmtRequest } from '../api/live-client.ts';
+import { ApiError } from '../api/errors.ts';
 
 export interface LocalizableContent {
   LanguageCode: string;
   Content: string;
+}
+
+/** Stock figures for a product item (Product.Models.Read.ProductItemStock). */
+export interface ProductItemStock {
+  ItemId?: number;
+  Stock?: number;
+  StockOversellable?: number;
+  StockStatic?: number;
+  StockSellable?: number;
+}
+
+/** A product item / SKU / variant (Product.Models.Read.ProductItem). */
+export interface ProductItem {
+  ItemId: number;
+  ArticleNumber?: string;
+  ProductId?: number;
+  Name?: string;
+  Gtin?: string;
+  Active?: boolean;
+  Shelf?: string;
+  Weight?: number;
+  DateCreated?: string;
+  DateUpdated?: string;
+  DateIncoming?: string;
+  ExternalId?: string;
+  Stock?: ProductItemStock;
+  [key: string]: unknown;
+}
+
+/**
+ * A variant dimension of a product (Variant.Models.Read.Variant): a Label/Value pair
+ * such as Label="Color", Value="Red", distinguishing this product within its group.
+ */
+export interface Variant {
+  ProductId?: number;
+  GroupId?: number;
+  Label?: string;
+  Value?: string;
 }
 
 /** A product as returned by the Management API (Product.Models.Read.Product). */
@@ -18,10 +57,25 @@ export interface Product {
   SupplierId?: number;
   SupplierName?: string;
   MainCategoryId?: number;
+  Items?: ProductItem[];
+  Variants?: Variant[];
   DateCreated?: string;
   DateUpdated?: string;
   DateFirstAvailable?: string;
   [key: string]: unknown;
+}
+
+/**
+ * A variant group (Variant.Models.Read.VariantGroup): links sibling products that are
+ * variants of one another (e.g. the same shirt as separate Red/Blue/Green products).
+ */
+export interface VariantGroup {
+  GroupId: number;
+  Name?: string;
+  CollapseInLists?: boolean;
+  MainProductId?: number;
+  ProductIds?: number[];
+  Products?: Product[];
 }
 
 interface Envelope<T> {
@@ -148,4 +202,54 @@ export function parseProductListArgs(args: string[]): ProductListArgs {
 export function productName(product: Product): string {
   const localized = product.Names?.find((n) => n.Content?.trim())?.Content;
   return (localized ?? product.ArticleNumber ?? String(product.ProductId)).trim();
+}
+
+/** The items (SKUs) of a product, fetched via `include=Items`. */
+export async function getProductItems(
+  id: string,
+  options?: { idType?: ProductIdType },
+): Promise<ProductItem[]> {
+  const product = await getProduct(id, { idType: options?.idType, include: 'Items' });
+  return product.Items ?? [];
+}
+
+/** Best-effort display name for a product item, falling back to its article number or id. */
+export function productItemName(item: ProductItem): string {
+  return (item.Name ?? item.ArticleNumber ?? String(item.ItemId)).trim();
+}
+
+/**
+ * The variant group a product belongs to — the sibling products that are variants of
+ * each other. Returns null if the product has no variant group. By default expands the
+ * member Products with their Names and Variant dimensions.
+ */
+export async function getVariantGroup(
+  id: string,
+  options?: { idType?: ProductIdType; include?: string },
+): Promise<VariantGroup | null> {
+  try {
+    const envelope = await mgmtRequest<Envelope<VariantGroup>>(
+      `/API/Variant/${encodeURIComponent(id)}/VariantGroup`,
+      { query: { productIdType: options?.idType, include: options?.include ?? 'Names,Variants' } },
+    );
+    return envelope.Resource ?? null;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * The variant dimensions of a product as "Label=Value" pairs, e.g. "Color=Red, Size=M".
+ * Within a variant group every member carries the whole group's Variants array, so we
+ * filter to the entries belonging to this product (falling back to all if none match).
+ */
+export function variantSummary(product: Product): string {
+  const all = product.Variants ?? [];
+  const own = all.filter((v) => v.ProductId === product.ProductId);
+  const list = own.length > 0 ? own : all;
+  return list
+    .filter((v) => v.Label || v.Value)
+    .map((v) => `${v.Label ?? '?'}=${v.Value ?? '?'}`)
+    .join(', ');
 }

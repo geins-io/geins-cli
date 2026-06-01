@@ -37,6 +37,18 @@ export async function getOutputDir(): Promise<string | null> {
   return resolveDir();
 }
 
+/** Resolve the output dir and create it if set. Returns the absolute path, or null if disabled. */
+export async function ensureOutputDir(): Promise<string | null> {
+  const dir = await resolveDir();
+  if (!dir) return null;
+  try {
+    await mkdir(dir, { recursive: true });
+  } catch {
+    // If creation fails, still return the path; the caller decides how to handle it.
+  }
+  return dir;
+}
+
 function fileStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
