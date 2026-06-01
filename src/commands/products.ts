@@ -35,6 +35,8 @@ interface PageResult {
   Page?: number;
   RowCount?: number;
   PageCount?: number;
+  PageSize?: number;
+  HasMoreRows?: boolean;
 }
 
 interface PagedEnvelope<T> {
@@ -67,7 +69,21 @@ export async function getProduct(id: string, options?: GetProductOptions): Promi
 }
 
 /** A product query body (Product.Models.ProductQuery). All fields optional. */
-export type ProductQuery = Record<string, unknown>;
+export interface ProductQuery {
+  UpdatedAfter?: string;
+  CreatedAfter?: string;
+  CreatedBefore?: string;
+  ProductIds?: number[];
+  CategoryIds?: number[];
+  BrandIds?: number[];
+  SupplierIds?: number[];
+  ArticleNumbers?: string[];
+  OnlySellable?: boolean;
+  OnlyInStock?: boolean;
+  FeedId?: number;
+  /** Required when fetching pages beyond the first; comes from PageResult.BatchId. */
+  BatchId?: string;
+}
 
 export interface QueryProductsResult {
   products: Product[];
@@ -78,13 +94,54 @@ export async function queryProducts(
   query: ProductQuery = {},
   options?: { include?: string; page?: number },
 ): Promise<QueryProductsResult> {
-  const path = options?.page ? `/API/Product/Query/${options.page}` : '/API/Product/Query';
+  const page = options?.page;
+  // The paged endpoint returns PageResult (incl. BatchId); the plain endpoint returns
+  // every match in one array with no paging info. Pages beyond 1 need BatchId in the body.
+  const path = page != null ? `/API/Product/Query/${page}` : '/API/Product/Query';
   const envelope = await mgmtRequest<PagedEnvelope<Product[]>>(path, {
     method: 'POST',
     body: query,
     query: { include: options?.include ?? 'Names' },
   });
   return { products: envelope.Resource ?? [], page: envelope.PageResult };
+}
+
+export interface ProductListArgs {
+  query: ProductQuery;
+  page?: number;
+  include?: string;
+  json: boolean;
+}
+
+/** Parse `product list` flags into a query + options, shared by the TUI and direct CLI. */
+export function parseProductListArgs(args: string[]): ProductListArgs {
+  const query: ProductQuery = {};
+  let page: number | undefined;
+  let include: string | undefined;
+  let json = false;
+
+  const num = (s?: string): number | undefined =>
+    s != null && s.trim() !== '' && !Number.isNaN(Number(s)) ? Number(s) : undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case '--brand': { const v = num(args[++i]); if (v != null) (query.BrandIds ??= []).push(v); break; }
+      case '--category': { const v = num(args[++i]); if (v != null) (query.CategoryIds ??= []).push(v); break; }
+      case '--supplier': { const v = num(args[++i]); if (v != null) (query.SupplierIds ??= []).push(v); break; }
+      case '--id': { const v = num(args[++i]); if (v != null) (query.ProductIds ??= []).push(v); break; }
+      case '--article': { const v = args[++i]; if (v) (query.ArticleNumbers ??= []).push(v); break; }
+      case '--updated-after': { const v = args[++i]; if (v) query.UpdatedAfter = v; break; }
+      case '--created-after': { const v = args[++i]; if (v) query.CreatedAfter = v; break; }
+      case '--sellable': query.OnlySellable = true; break;
+      case '--in-stock': query.OnlyInStock = true; break;
+      case '--page': page = num(args[++i]); break;
+      case '--batch': { const v = args[++i]; if (v) query.BatchId = v; break; }
+      case '--include': include = args[++i]; break;
+      case '--json': json = true; break;
+    }
+  }
+
+  return { query, page, include, json };
 }
 
 /** Best-effort display name for a product, falling back to its article number. */

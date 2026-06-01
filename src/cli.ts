@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, productName } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import {
@@ -29,6 +29,35 @@ import {
 } from './commands/workflows.ts';
 
 const VERSION = '0.1.0';
+
+const PRODUCT_HELP = [
+  'geins product — query the product catalog (Management API)',
+  '',
+  'Subcommands:',
+  '  get <id> [--idtype <0-3>] [--json]   Show one product (id is the internal id by default)',
+  '  list [filters] [--json]              Query products (alias: query); defaults to page 1',
+  '',
+  'list / query filters (repeatable flags accumulate):',
+  '  --brand <id>                 Brand id',
+  '  --category <id>              Category id',
+  '  --supplier <id>              Supplier id',
+  '  --id <productId>             Product id',
+  '  --article <articleNumber>    Article number',
+  '  --updated-after <ISO8601>    Updated after a date (e.g. 2026-01-01T00:00:00Z)',
+  '  --created-after <ISO8601>    Created after a date',
+  '  --sellable                   Only sellable products',
+  '  --in-stock                   Only in-stock products',
+  '  --page <n>                   Page number (page size 1000)',
+  '  --batch <id>                 BatchId from a prior page (required for page > 1)',
+  '  --include <fields>           Child collections, e.g. Names,Prices,Categories',
+  '  --json                       Raw JSON output',
+  '',
+  'Examples:',
+  '  geins product get 10001 --json',
+  '  geins product list --brand 1 --in-stock',
+  '  geins product list --page 2 --batch <BatchId> --json',
+  '  geins product list --account prod-elproman   # pick a live-API account (headless)',
+].join('\n');
 
 export async function run(argv: string[]): Promise<void> {
   const args = argv.slice(2);
@@ -86,7 +115,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  whoami    Show current user and account');
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
-    console.log('  product    Product commands (get) — uses Management API');
+    console.log('  product    Product commands (get, list) — uses Management API');
     console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped\n');
@@ -96,6 +125,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  --json      Force JSON output');
     console.log('  --help      Show help');
     console.log('  --version   Show version');
+    console.log("\nRun 'geins product --help' for that command's options and examples.");
     return;
   }
 
@@ -108,7 +138,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   const commandArgs = args.slice(1);
 
   if (commandArgs.includes('--help')) {
-    console.log(`${commandName} — CLI command`);
+    if (commandName === 'product') console.log(PRODUCT_HELP);
+    else console.log(`${commandName} — CLI command`);
     return;
   }
 
@@ -440,10 +471,18 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           case 'get': {
             const id = subArgs[0];
             if (!id) {
-              console.error('Usage: geins product get <id>');
+              console.error('Usage: geins product get <id> [--idtype <0-3>] [--include <fields>] [--json]');
               process.exit(1);
             }
-            const product = await getProduct(id);
+            let idType: ProductIdType | undefined;
+            const itIdx = subArgs.indexOf('--idtype');
+            if (itIdx !== -1 && subArgs[itIdx + 1] != null) {
+              const n = Number(subArgs[itIdx + 1]);
+              if (n >= 0 && n <= 3) idType = n as ProductIdType;
+            }
+            const incIdx = subArgs.indexOf('--include');
+            const include = incIdx !== -1 ? subArgs[incIdx + 1] : undefined;
+            const product = await getProduct(id, { idType, include });
             if (jsonMode) {
               console.log(JSON.stringify(product, null, 2));
             } else {
@@ -457,14 +496,38 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             }
             break;
           }
+          case 'list':
+          case 'query': {
+            const { query, page, include, json } = parseProductListArgs(subArgs);
+            const result = await queryProducts(query, { page: page ?? 1, include });
+            if (json) {
+              console.log(JSON.stringify(result, null, 2));
+              break;
+            }
+            for (const p of result.products) {
+              const status = p.Active ? '●' : '○';
+              console.log(`${status} ${productName(p)}  (${p.ProductId})  ${p.ArticleNumber ?? ''}`.trimEnd());
+            }
+            const pr = result.page;
+            if (pr) {
+              console.log(`\n${result.products.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
+              if (pr.HasMoreRows) {
+                console.log(`Next page: geins product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+              }
+            }
+            break;
+          }
+          case 'help':
+            console.log(PRODUCT_HELP);
+            break;
           default:
             if (!sub) {
-              console.error('Usage: geins product <subcommand>');
+              console.log(PRODUCT_HELP);
             } else {
-              console.error(`Unknown subcommand: product ${sub}`);
+              console.error(`Unknown subcommand: product ${sub}\n`);
+              console.error(PRODUCT_HELP);
+              process.exit(1);
             }
-            console.error('Subcommands: get');
-            process.exit(1);
         }
         break;
       }

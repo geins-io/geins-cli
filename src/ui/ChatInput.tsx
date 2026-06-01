@@ -24,7 +24,7 @@ const COMMANDS: Record<string, string> = {
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
-  product: ['get', 'help'],
+  product: ['get', 'list', 'query', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
@@ -48,6 +48,8 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
   },
   product: {
     get: '<id>',
+    list: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
+    query: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
   },
   api: {
     GET: '<path>',

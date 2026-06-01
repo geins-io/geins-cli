@@ -49,7 +49,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, productName } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
@@ -348,7 +348,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /whoami     Show current user');
           logText('  /apikey     Manage API accounts         /apikey list | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
-          logText('  /product    Product commands        /product get <id>');
+          logText('  /product    Product commands        /product get <id> | list');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /management Management API           /management GET /API/Market/List');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
@@ -707,9 +707,36 @@ export function App({ version = VERSION }: { version?: string }) {
               if (product.MainCategoryId != null) logText(`    Category: ${product.MainCategoryId}`);
               break;
             }
+            case 'list':
+            case 'query': {
+              const { query, page, include } = parseProductListArgs(args.slice(1));
+              appState.setLiveComponent(
+                <Box key="product-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>Querying products...</Text>
+                </Box>,
+              );
+              const result = await queryProducts(query, { page: page ?? 1, include });
+              appState.setLiveComponent(null);
+              if (result.products.length === 0) { logDim('  No products found.'); break; }
+              const CAP = 50;
+              for (const p of result.products.slice(0, CAP)) {
+                const status = p.Active ? '●' : '○';
+                logText(`  ${status} ${productName(p)}  ${p.ArticleNumber ?? ''}`.trimEnd());
+              }
+              if (result.products.length > CAP) logDim(`  … and ${result.products.length - CAP} more on this page`);
+              const pr = result.page;
+              if (pr) {
+                logDim(`  ${result.products.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
+                if (pr.HasMoreRows) logDim(`  Next: /product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+              }
+              break;
+            }
             case 'help':
               logText('');
               logText('  /product get <id>    Show product details');
+              logText('  /product list        Query products (filters below)');
+              logText('    --brand <id> --category <id> --article <n> --sellable --in-stock --page <n>');
               logText('');
               break;
             default:
