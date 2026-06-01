@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import { ChatHistory } from './ChatHistory.tsx';
 import { ChatInput } from './ChatInput.tsx';
@@ -13,6 +13,7 @@ import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
 import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, loadConfig, saveConfig, type ApiCredentials } from '../config/store.ts';
 import { resetCredentialsCache } from '../api/live-client.ts';
+import { setActiveSignal } from '../api/abort.ts';
 import { setOutputDir, getOutputDir } from '../output/sink.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
@@ -50,7 +51,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
@@ -90,40 +91,27 @@ function tokenizeCommandLine(line: string): string[] {
 
 export function App({ version = VERSION }: { version?: string }) {
   const { exit } = useApp();
-  const { stdout, write } = useStdout();
   const appState = useAppState();
 
-  // Redraw on terminal resize. Ink reflows the live frame itself, but the chat
-  // history lives in <Static> — already committed to scrollback at the old width.
-  // When the terminal re-wraps that text it looks broken and Ink never repaints it.
-  // So on resize we clear the screen + scrollback (via Ink's integrated writer, so
-  // its frame bookkeeping stays correct) and bump `redrawKey`, which remounts the
-  // <Static> region and re-emits the whole history cleanly at the new width.
-  const [redrawKey, setRedrawKey] = useState(0);
-  useEffect(() => {
-    if (!stdout) return;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const onResize = () => {
-      // Terminals fire a burst of resize events while a drag is in progress;
-      // debounce so we only redraw once it settles.
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        write('\u001b[2J\u001b[3J\u001b[H'); // clear screen + scrollback, home cursor
-        setRedrawKey(k => k + 1);
-      }, 100);
-    };
-    stdout.on('resize', onResize);
-    return () => {
-      if (timer) clearTimeout(timer);
-      stdout.off('resize', onResize);
-    };
-  }, [stdout, write]);
+  // Terminal resize is handled by Ink natively — it re-wraps and redraws the live frame,
+  // and the terminal keeps the chat-history scrollback. We deliberately do NOT clear the
+  // screen/scrollback on resize: doing so wiped history, because Ink's <Static> can't be made
+  // to reliably re-emit on a forced remount (render throttling drops the re-emit).
 
   // While a modal is open the input box is hidden (it handles Ctrl-C itself), so
   // catch Ctrl-C here to let the user still quit out of a modal flow.
   useInput((input, key) => {
     if (key.ctrl && input === 'c') exit();
   }, { isActive: appState.activeMode !== null });
+
+  // An operation (command/copilot run) is in flight. `abortRef` holds its controller;
+  // Ctrl-C aborts it, which cancels in-flight API calls (the ambient signal) and kills
+  // any copilot/geins subprocess, returning the user to the input prompt.
+  const [busy, setBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') abortRef.current?.abort();
+  }, { isActive: busy });
 
   const logText = useCallback((text: string) => {
     appState.addToChat(
@@ -253,6 +241,14 @@ export function App({ version = VERSION }: { version?: string }) {
     if (!trimmed) return;
 
     logEntry({ type: 'command', content: trimmed });
+
+    // Mark the operation in flight and register its abort signal so Ctrl-C can cancel
+    // in-flight API calls (via the ambient signal) and kill copilot/geins subprocesses.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setActiveSignal(controller.signal);
+    setBusy(true);
+    try {
 
     // Copilot mode: non-slash input goes to AI
     if (appState.copilotActive && !trimmed.startsWith('/')) {
@@ -446,7 +442,8 @@ export function App({ version = VERSION }: { version?: string }) {
         }
       } catch (err) {
         appState.setLiveComponent(null);
-        logError(`  ${formatError(err)}`);
+        if (controller.signal.aborted) logDim('  ✕ Cancelled');
+        else logError(`  ${formatError(err)}`);
       }
       return;
     }
@@ -470,7 +467,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /login      Authenticate with Geins');
           logText('  /logout     Clear credentials and exit');
           logText('  /whoami     Show current user');
-          logText('  /apikey     Manage API accounts         /apikey list | use <name>');
+          logText('  /apikey     Manage API accounts         /apikey list | add | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id> | list | items <id> | variants <id>');
           logText('  /api        Raw API request         /api GET /products');
@@ -495,19 +492,19 @@ export function App({ version = VERSION }: { version?: string }) {
 
         case 'apikey': {
           const action = args[0]?.toLowerCase() ?? '';
-          if (action === 'add' || action === '') {
+          if (action === 'add') {
             appState.setActiveMode('apikey');
-          } else if (action === 'list' || action === 'status') {
+          } else if (action === 'list' || action === 'status' || action === '') {
             const store = await loadCredentialsStore();
             const names = Object.keys(store.profiles);
             if (names.length === 0) {
-              logDim('  No API credentials. Run /apikey to add an account.');
+              logDim('  No API credentials. Run /apikey add to add an account.');
             } else {
               for (const name of names) {
                 const marker = name === store.active ? '●' : '○';
                 logText(`  ${marker} ${name}  (user: ${store.profiles[name]!.username})`);
               }
-              logDim('  ● = active. Switch with /apikey use <name>.');
+              logDim('  ● = active. Add with /apikey add · switch with /apikey use <name>.');
             }
           } else if (action === 'use') {
             const name = args[1];
@@ -515,7 +512,7 @@ export function App({ version = VERSION }: { version?: string }) {
               const store = await loadCredentialsStore();
               const names = Object.keys(store.profiles);
               if (names.length === 0) {
-                logDim('  No API credentials. Run /apikey to add an account.');
+                logDim('  No API credentials. Run /apikey add to add an account.');
               } else {
                 appState.setApiKeyPicker({ names, active: store.active });
                 appState.setActiveMode('select-apikey');
@@ -1152,6 +1149,75 @@ export function App({ version = VERSION }: { version?: string }) {
               logDim(`  ${brands.length} brand${brands.length === 1 ? '' : 's'}`);
               break;
             }
+            case 'categories':
+            case 'category': {
+              const cArgs = args.slice(1);
+              const action = cArgs[0]?.toLowerCase();
+              const flagVal = (flag: string) => { const i = cArgs.indexOf(flag); return i !== -1 ? cArgs[i + 1] : undefined; };
+              const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+              const parseLoc = (flag: string): LocalizableContent[] | undefined => {
+                const parts = cArgs.flatMap((a, i) => (cArgs[i - 1] === flag ? [a] : []));
+                if (parts.length === 0) return undefined;
+                return parts.map((p) => { const c = p.indexOf(':'); return c === -1 ? { LanguageCode: '', Content: p } : { LanguageCode: p.slice(0, c), Content: p.slice(c + 1) }; });
+              };
+              const idTypeFor = () => { const i = cArgs.indexOf('--idtype'); if (i !== -1 && cArgs[i + 1] != null) { const n = Number(cArgs[i + 1]); if (n >= 0 && n <= 3) return n as 0 | 1 | 2 | 3; } return undefined; };
+
+              if (action === 'assign') {
+                const productId = cArgs[1]; const categoryId = Number(cArgs[2]);
+                if (!productId || Number.isNaN(categoryId)) { logError('  Usage: /product categories assign <productId> <categoryId> [--idtype <0-3>]'); break; }
+                await assignProductCategory(productId, categoryId, { idType: idTypeFor() });
+                logSuccess(`  ✓ Assigned category ${categoryId} to product ${productId}`);
+                break;
+              }
+              if (action === 'unassign' || action === 'remove') {
+                const productId = cArgs[1]; const categoryId = Number(cArgs[2]);
+                if (!productId || Number.isNaN(categoryId)) { logError('  Usage: /product categories unassign <productId> <categoryId> [--idtype <0-3>]'); break; }
+                const r = await unassignProductCategory(productId, categoryId, { idType: idTypeFor() });
+                if (!r.wasAssigned) { logDim(`  Category ${categoryId} is not assigned to product ${productId}.`); break; }
+                if (r.stillPresent) {
+                  logError(`  Could not remove ${categoryId}: it's an ancestor of another assigned category (the API keeps ancestors).`);
+                  logDim(`  Remove the more specific (leaf) category instead. Categories: ${r.remaining.join(', ')}`);
+                  break;
+                }
+                logSuccess(`  ✓ Removed category ${categoryId} from product ${productId}`);
+                logDim(`  Remaining: ${r.remaining.join(', ') || '(none)'}`);
+                if (r.wasMain) logDim(`  Note: ${categoryId} was the main category; main is now ${r.newMain ?? '(none)'}.`);
+                break;
+              }
+              if (action === 'get') {
+                const cid = Number(cArgs[1]);
+                if (Number.isNaN(cid)) { logError('  Usage: /product categories get <id>'); break; }
+                const cat = await getCategory(cid);
+                const flags = [cat.Hidden ? 'hidden' : null, cat.Active === false ? 'inactive' : null].filter(Boolean).join(', ');
+                logText(`  ${cat.CategoryId}  ${categoryName(cat)}${cat.ParentCategoryId ? `  (parent ${cat.ParentCategoryId})` : ''}${flags ? `  [${flags}]` : ''}`);
+                for (const n of cat.Names ?? []) logDim(`    name ${n.LanguageCode || '–'}: ${n.Content}`);
+                break;
+              }
+              if (action === 'create' || action === 'add') {
+                const names = parseLoc('--name');
+                if (!names) { logError('  Usage: /product categories create --name <code>:<text> [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]'); break; }
+                const input: CategoryWrite = { Names: names, ParentCategoryId: numFlag('--parent'), Descriptions: parseLoc('--desc'), Hidden: cArgs.includes('--hidden') ? true : undefined, Active: cArgs.includes('--inactive') ? false : undefined };
+                const cat = await createCategory(input);
+                logSuccess(`  ✓ Created category ${cat.CategoryId}: ${categoryName(cat)}`);
+                break;
+              }
+              if (action === 'update') {
+                const cid = Number(cArgs[1]);
+                if (Number.isNaN(cid)) { logError('  Usage: /product categories update <id> [--name <code>:<text>] [--parent <id>] [--desc <code>:<text>] [--hidden|--show] [--active|--inactive]'); break; }
+                const changes: CategoryWrite = { Names: parseLoc('--name'), ParentCategoryId: numFlag('--parent'), Descriptions: parseLoc('--desc'), Hidden: cArgs.includes('--hidden') ? true : cArgs.includes('--show') ? false : undefined, Active: cArgs.includes('--active') ? true : cArgs.includes('--inactive') ? false : undefined };
+                const cat = await updateCategory(cid, changes);
+                logSuccess(`  ✓ Updated category ${cat.CategoryId}: ${categoryName(cat)}`);
+                break;
+              }
+              const categories = await queryCategories();
+              if (categories.length === 0) { logDim('  No categories.'); break; }
+              for (const c of categories) {
+                const flags = [c.Hidden ? 'hidden' : null, c.Active === false ? 'inactive' : null].filter(Boolean).join(', ');
+                logText(`  ${c.CategoryId}  ${categoryName(c)}${c.ParentCategoryId ? `  (parent ${c.ParentCategoryId})` : ''}${flags ? `  [${flags}]` : ''}`);
+              }
+              logDim(`  ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'}`);
+              break;
+            }
             case 'parameters':
             case 'params': {
               const pArgs = args.slice(1);
@@ -1292,6 +1358,7 @@ export function App({ version = VERSION }: { version?: string }) {
               logText('  /product variants labels        Manage variant dimension labels (list/add/remove/rename)');
               logText('  /product images <id>     List images; add <id> <file|url> [--primary] | add-existing <id> <name> | delete | set-primary | reorder');
               logText('  /product brands          Manage brands (list/get/create/update/delete)');
+              logText('  /product categories      Manage categories (list/get/create/update); assign/unassign <productId> <categoryId>');
               logText('  /product relation-types  Manage relation types (list/get/add/update/delete)');
               logText('  /product relations <id>  List relations; link/unlink <id> <relationTypeId> <relatedId...>');
               logText('  /product parameters <id> List values; set/remove/get <id> <paramId>; defs|groups|predefined ...');
@@ -1536,7 +1603,15 @@ export function App({ version = VERSION }: { version?: string }) {
           logDim('  Type /help for available commands');
       }
     } catch (err) {
-      logError(`  ${formatError(err)}`);
+      appState.setLiveComponent(null);
+      if (controller.signal.aborted) logDim('  ✕ Cancelled');
+      else logError(`  ${formatError(err)}`);
+    }
+
+    } finally {
+      setBusy(false);
+      setActiveSignal(undefined);
+      abortRef.current = null;
     }
   }, [appState, logText, logDim, logSuccess, logError, exit]);
 
@@ -1565,7 +1640,6 @@ export function App({ version = VERSION }: { version?: string }) {
   return (
     <Box flexDirection="column">
       <ChatHistory
-        redrawKey={redrawKey}
         ready={appState.ready}
         welcomeComponent={welcomeComponent}
         queuedComponents={appState.chatComponents}
@@ -1631,6 +1705,7 @@ export function App({ version = VERSION }: { version?: string }) {
       {!isModal && (
         <ChatInput
           onSubmit={handleCommand}
+          busy={busy}
           copilotActive={appState.copilotActive}
           copilotProvider={appState.copilotProvider}
           onToggleCopilot={async () => {

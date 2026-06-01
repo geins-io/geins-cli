@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
@@ -48,6 +48,9 @@ const PRODUCT_HELP = [
   '  images set-primary <id> <imageName>       Make an image the primary one',
   '  images reorder <id> <imageName> <pos>     Change an image\'s position',
   '  brands [list|get <id>|create --name <n> [--external-id <id>] [--desc <code>:<text>]|update <id> ...|delete <id>]   Manage brands',
+  '  categories [list|get <id>|create --name <code>:<text> [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]|update <id> ...]   Manage categories',
+  '  categories assign <productId> <categoryId> [--idtype <0-3>]     Assign a category to a product',
+  '  categories unassign <productId> <categoryId> [--idtype <0-3>]   Remove a category from a product (preserves main)',
   '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
   '  relations <id> [--json]                   List a product\'s related products',
   '  relations link <id> <relationTypeId> <relatedId...>     Link related products',
@@ -104,6 +107,9 @@ const PRODUCT_HELP = [
   '  geins product images add-existing 10001 hero.jpg',
   '  geins product brands',
   '  geins product brands create --name Nike --external-id nike',
+  '  geins product categories',
+  '  geins product categories create --name en:Shoes --parent 1',
+  '  geins product categories assign 10001 42',
   '  geins product relation-types add Accessories',
   '  geins product relations link 10001 1 10002 10003',
   '  geins product parameters 10001',
@@ -900,6 +906,93 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             if (brands.length === 0) { console.log('No brands.'); break; }
             for (const b of brands) console.log(`${b.BrandId}  ${brandName(b)}${b.ExternalId ? `  (ext: ${b.ExternalId})` : ''}`);
             console.log(`\n${brands.length} brand${brands.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'categories':
+          case 'category': {
+            const action = subArgs[0]?.toLowerCase();
+            const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
+            const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+            // Repeatable --name/--desc as <code>:<text> (no colon → default-language content).
+            const parseLoc = (flag: string): LocalizableContent[] | undefined => {
+              const parts = subArgs.flatMap((a, i) => (subArgs[i - 1] === flag ? [a] : []));
+              if (parts.length === 0) return undefined;
+              return parts.map((p) => { const c = p.indexOf(':'); return c === -1 ? { LanguageCode: '', Content: p } : { LanguageCode: p.slice(0, c), Content: p.slice(c + 1) }; });
+            };
+            const idTypeFor = () => { const i = subArgs.indexOf('--idtype'); if (i !== -1 && subArgs[i + 1] != null) { const n = Number(subArgs[i + 1]); if (n >= 0 && n <= 3) return n as ProductIdType; } return undefined; };
+
+            if (action === 'assign') {
+              const productId = subArgs[1];
+              const categoryId = Number(subArgs[2]);
+              if (!productId || Number.isNaN(categoryId)) { console.error('Usage: geins product categories assign <productId> <categoryId> [--idtype <0-3>]'); process.exit(1); }
+              await assignProductCategory(productId, categoryId, { idType: idTypeFor() });
+              console.log(`✓ Assigned category ${categoryId} to product ${productId}`);
+              break;
+            }
+            if (action === 'unassign' || action === 'remove') {
+              const productId = subArgs[1];
+              const categoryId = Number(subArgs[2]);
+              if (!productId || Number.isNaN(categoryId)) { console.error('Usage: geins product categories unassign <productId> <categoryId> [--idtype <0-3>]'); process.exit(1); }
+              const r = await unassignProductCategory(productId, categoryId, { idType: idTypeFor() });
+              if (!r.wasAssigned) { console.log(`Category ${categoryId} is not assigned to product ${productId}. Categories: ${r.remaining.join(', ') || '(none)'}`); break; }
+              if (r.stillPresent) {
+                console.error(`Could not remove category ${categoryId} from product ${productId}: it's an ancestor of another assigned category, and the API keeps ancestors. Remove the more specific (leaf) category instead.`);
+                console.error(`Categories: ${r.remaining.join(', ')}`);
+                process.exit(1);
+              }
+              console.log(`✓ Removed category ${categoryId} from product ${productId}. Remaining: ${r.remaining.join(', ') || '(none)'}`);
+              if (r.wasMain) console.log(`  Note: ${categoryId} was the main category; main is now ${r.newMain ?? '(none)'}.`);
+              break;
+            }
+            if (action === 'get') {
+              const cid = Number(subArgs[1]);
+              if (Number.isNaN(cid)) { console.error('Usage: geins product categories get <id> [--json]'); process.exit(1); }
+              const cat = await getCategory(cid);
+              if (jsonMode) { console.log(JSON.stringify(cat, null, 2)); break; }
+              const flags = [cat.Hidden ? 'hidden' : null, cat.Active === false ? 'inactive' : null].filter(Boolean).join(', ');
+              console.log(`${cat.CategoryId}  ${categoryName(cat)}${cat.ParentCategoryId ? `  (parent ${cat.ParentCategoryId})` : ''}${flags ? `  [${flags}]` : ''}`);
+              for (const n of cat.Names ?? []) console.log(`  name ${n.LanguageCode || '–'}: ${n.Content}`);
+              for (const d of cat.Descriptions ?? []) console.log(`  desc ${d.LanguageCode || '–'}: ${d.Content}`);
+              if (cat.GoogleCategoryPath) console.log(`  google: ${cat.GoogleCategoryPath}`);
+              break;
+            }
+            if (action === 'create' || action === 'add') {
+              const names = parseLoc('--name');
+              if (!names) { console.error('Usage: geins product categories create --name <code>:<text> [--name ...] [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]'); process.exit(1); }
+              const input: CategoryWrite = {
+                Names: names,
+                ParentCategoryId: numFlag('--parent'),
+                Descriptions: parseLoc('--desc'),
+                Hidden: subArgs.includes('--hidden') ? true : undefined,
+                Active: subArgs.includes('--inactive') ? false : undefined,
+              };
+              const cat = await createCategory(input);
+              console.log(`✓ Created category ${cat.CategoryId}: ${categoryName(cat)}`);
+              break;
+            }
+            if (action === 'update') {
+              const cid = Number(subArgs[1]);
+              if (Number.isNaN(cid)) { console.error('Usage: geins product categories update <id> [--name <code>:<text>] [--parent <id>] [--desc <code>:<text>] [--hidden] [--show] [--active] [--inactive]'); process.exit(1); }
+              const changes: CategoryWrite = {
+                Names: parseLoc('--name'),
+                ParentCategoryId: numFlag('--parent'),
+                Descriptions: parseLoc('--desc'),
+                Hidden: subArgs.includes('--hidden') ? true : subArgs.includes('--show') ? false : undefined,
+                Active: subArgs.includes('--active') ? true : subArgs.includes('--inactive') ? false : undefined,
+              };
+              const cat = await updateCategory(cid, changes);
+              console.log(`✓ Updated category ${cat.CategoryId}: ${categoryName(cat)}`);
+              break;
+            }
+            // list (default)
+            const categories = await queryCategories();
+            if (jsonMode) { console.log(JSON.stringify(categories, null, 2)); break; }
+            if (categories.length === 0) { console.log('No categories.'); break; }
+            for (const c of categories) {
+              const flags = [c.Hidden ? 'hidden' : null, c.Active === false ? 'inactive' : null].filter(Boolean).join(', ');
+              console.log(`${c.CategoryId}  ${categoryName(c)}${c.ParentCategoryId ? `  (parent ${c.ParentCategoryId})` : ''}${flags ? `  [${flags}]` : ''}`);
+            }
+            console.log(`\n${categories.length} categor${categories.length === 1 ? 'y' : 'ies'}`);
             break;
           }
           case 'parameters':

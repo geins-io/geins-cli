@@ -25,7 +25,7 @@ const COMMANDS: Record<string, string> = {
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
-  product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'relation-types', 'relations', 'parameters', 'help'],
+  product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'categories', 'relation-types', 'relations', 'parameters', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
@@ -55,6 +55,7 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     variants: '<productId> | create | labels [add|remove|rename]',
     images: '<productId> | add <id> <file|url> | delete | set-primary | reorder',
     brands: '[list | get <id> | create --name <n> [--external-id <id>] | update <id> | delete <id>]',
+    categories: '[list | get <id> | create --name <code>:<text> [--parent <id>] | update <id> | assign/unassign <productId> <categoryId>]',
     'relation-types': '[list | get <id> | add <name> | update <id> | delete <id>]',
     relations: '<productId> | link <id> <typeId> <relatedId...> | unlink ...',
     parameters: '<productId> | get <id> <paramId> | set <id> <paramId> <value> | remove | batch | defs | groups | predefined',
@@ -103,6 +104,8 @@ function normalizeDroppedPath(match: string): string {
 
 interface ChatInputProps {
   disabled?: boolean;
+  /** An operation is in flight; Ctrl-C is reserved for cancelling it (handled by App). */
+  busy?: boolean;
   copilotActive?: boolean;
   copilotProvider?: string;
   onSubmit: (message: string) => void;
@@ -110,7 +113,7 @@ interface ChatInputProps {
   onToggleCopilot?: () => void;
 }
 
-export function ChatInput({ disabled = false, copilotActive = false, copilotProvider, onSubmit, onCancel, onToggleCopilot }: ChatInputProps) {
+export function ChatInput({ disabled = false, busy = false, copilotActive = false, copilotProvider, onSubmit, onCancel, onToggleCopilot }: ChatInputProps) {
   const { exit } = useApp();
   const [value, setValue] = useState('');
   const [menuIndex, setMenuIndex] = useState(0);
@@ -138,6 +141,9 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
   const matches = showMenu ? (cycleAll ? available : getMatches(value)) : [];
 
   useInput((input, key) => {
+    // While an operation is in flight, Ctrl-C is reserved for cancelling it — App's
+    // handler aborts the running command; don't also clear/exit here.
+    if (key.ctrl && input === 'c' && busy) return;
     // Ctrl-C clears the current input; if it's already empty, exit.
     if (key.ctrl && input === 'c') {
       if (value) {
@@ -319,20 +325,10 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
 
   const hints = getHints();
 
+  const menuVisible = showMenu && matches.length > 0;
+
   return (
     <Box flexDirection="column">
-      {showMenu && matches.length > 0 ? (
-        <Box flexDirection="column" borderStyle="single" paddingX={1} marginX={1}>
-          {matches.map((cmd, i) => (
-            <Box key={cmd} gap={2}>
-              <Text color={i === menuIndex ? 'cyan' : undefined} bold={i === menuIndex}>
-                {i === menuIndex ? '▸' : ' '} /{cmd}
-              </Text>
-              <Text dimColor>{COMMANDS[cmd]}</Text>
-            </Box>
-          ))}
-        </Box>
-      ) : null}
       <Text dimColor>{separator}</Text>
       <Box paddingX={1}>
         <Text color={copilotActive ? 'magenta' : 'cyan'} bold>{copilotActive ? '✦ ' : '❯ '}</Text>
@@ -344,6 +340,21 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
         {hints && <Text dimColor>  {hints}</Text>}
       </Box>
       <Text dimColor>{separator}</Text>
+      {menuVisible ? (
+        <>
+          <Box flexDirection="column" paddingX={1}>
+            {matches.map((cmd, i) => (
+              <Box key={cmd} gap={2}>
+                <Text color={i === menuIndex ? 'cyan' : undefined} bold={i === menuIndex}>
+                  {i === menuIndex ? '▸' : ' '} /{cmd}
+                </Text>
+                <Text dimColor>{COMMANDS[cmd]}</Text>
+              </Box>
+            ))}
+          </Box>
+          <Text dimColor>{separator}</Text>
+        </>
+      ) : null}
       <Box paddingX={1}>
         <Text color={copilotActive ? 'magenta' : 'cyan'}>
           {copilotActive ? `⏵⏵ copilot mode on` : '⏵⏵ cli mode on'}
@@ -351,7 +362,7 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
         {copilotActive && copilotProvider && (
           <Text dimColor>{` · ${copilotProvider}`}</Text>
         )}
-        <Text dimColor> (shift+tab to cycle)</Text>
+        <Text dimColor>{busy ? ' · ctrl-c to cancel' : ' (shift+tab to cycle)'}</Text>
       </Box>
     </Box>
   );

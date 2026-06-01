@@ -1,6 +1,7 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
 import { getOutputDir, ensureOutputDir } from '../output/sink.ts';
 import { existsSync, statSync } from 'node:fs';
+import { getActiveSignal } from '../api/abort.ts';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -128,6 +129,10 @@ const SYSTEM_CONTEXT = [
   '  geins product images <id> [--json]         — list product images',
   '  geins product images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   — upload an image (jpg/png/gif)',
   '  geins product images [delete|set-primary|reorder] <id> <imageName> [<pos>]   — manage images',
+  '  geins product brands [list|get <id>|create --name <n> [--external-id <id>]|update <id>|delete <id>]   — brand registry',
+  '  geins product categories [list|get <id>|create --name <code>:<text> [--parent <id>]|update <id>]   — category tree',
+  '  geins product categories assign <productId> <categoryId>     — add a category to a product',
+  '  geins product categories unassign <productId> <categoryId>   — remove a category from a product',
   '  geins product relation-types [list|add <name>|get <id>|update <id>|delete <id>]   — relation type registry',
   '  geins product relations <id> [--json]      — list a product\'s related products',
   '  geins product relations [link|unlink] <id> <relationTypeId> <relatedId...>   — relate/unrelate products',
@@ -442,6 +447,19 @@ function formatToolLabel(name: string, input: Record<string, unknown>): string {
   }
 }
 
+/**
+ * Kill a spawned process if the ambient operation is cancelled (Ctrl-C in the TUI).
+ * The listener is one-shot and tied to the per-operation signal, which is dropped when
+ * the operation ends, so there's nothing to clean up.
+ */
+function killOnAbort(proc: { kill: () => void }): void {
+  const signal = getActiveSignal();
+  if (!signal) return;
+  const kill = () => { try { proc.kill(); } catch { /* already gone */ } };
+  if (signal.aborted) kill();
+  else signal.addEventListener('abort', kill, { once: true });
+}
+
 export async function chatStream(
   prompt: string,
   onChunk: (text: string) => void,
@@ -468,6 +486,7 @@ export async function chatStream(
     stdin: 'pipe',
     ...(await copilotProcOptions()),
   });
+  killOnAbort(proc);
 
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
@@ -691,6 +710,7 @@ export async function executeGeinsCommand(command: string): Promise<{ output: st
     stderr: 'pipe',
     cwd: process.cwd(),
   });
+  killOnAbort(proc);
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;

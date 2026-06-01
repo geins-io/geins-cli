@@ -102,6 +102,7 @@ export interface Product {
   SupplierId?: number;
   SupplierName?: string;
   MainCategoryId?: number;
+  Categories?: Category[];
   PrimaryImage?: string | null;
   Items?: ProductItem[];
   Variants?: Variant[];
@@ -862,6 +863,160 @@ export async function deleteBrand(id: number): Promise<void> {
 /** Best-effort display name for a brand. */
 export function brandName(brand: Brand): string {
   return (brand.Name ?? brand.ExternalId ?? String(brand.BrandId ?? '?')).trim();
+}
+
+// ── Categories (account-wide tree) ──────────────────────────────────────────────
+
+/** A category (Category.Models.Read.Category). */
+export interface Category {
+  CategoryId?: number;
+  ParentCategoryId?: number;
+  Names?: LocalizableContent[];
+  Descriptions?: LocalizableContent[];
+  SecondaryDescriptions?: LocalizableContent[];
+  Meta?: Record<string, unknown>;
+  GoogleCategoryPath?: string;
+  Hidden?: boolean;
+  Active?: boolean;
+}
+
+/** The writable shape of a category (Category.Models.Write.Category). */
+export interface CategoryWrite {
+  ParentCategoryId?: number;
+  Names?: LocalizableContent[];
+  Descriptions?: LocalizableContent[];
+  SecondaryDescriptions?: LocalizableContent[];
+  Meta?: Record<string, unknown>;
+  Hidden?: boolean;
+  Active?: boolean;
+}
+
+/** A category query body (Category.Models.CategoryQuery). All fields optional. */
+export interface CategoryQuery {
+  CreatedAfter?: string;
+  CategoryIds?: number[];
+}
+
+/** POST /API/Category/Query — list/query categories (an empty body returns all). */
+export async function queryCategories(query: CategoryQuery = {}): Promise<Category[]> {
+  const envelope = await mgmtRequest<Envelope<Category[]>>('/API/Category/Query', {
+    method: 'POST',
+    body: query,
+  });
+  return envelope.Resource ?? [];
+}
+
+/** GET /API/Category/{id} — one category. */
+export async function getCategory(id: number): Promise<Category> {
+  const envelope = await mgmtRequest<Envelope<Category>>(`/API/Category/${id}`);
+  return envelope.Resource;
+}
+
+/** POST /API/Category — create a category. */
+export async function createCategory(input: CategoryWrite): Promise<Category> {
+  const envelope = await mgmtRequest<Envelope<Category>>('/API/Category', { method: 'POST', body: input });
+  return envelope.Resource;
+}
+
+/**
+ * PUT /API/Category/{id} — update a category. The API treats this as a partial merge
+ * (omitted properties are left unchanged), so we send only the supplied fields.
+ */
+export async function updateCategory(id: number, changes: CategoryWrite): Promise<Category> {
+  const envelope = await mgmtRequest<Envelope<Category>>(`/API/Category/${id}`, { method: 'PUT', body: changes });
+  return envelope.Resource;
+}
+
+/** PUT /API/Product/{productId}/Category — assign a category to a product. */
+export async function assignProductCategory(
+  productId: string,
+  categoryId: number,
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Category`, {
+    method: 'PUT',
+    body: { CategoryId: categoryId },
+    query: { productIdType: options?.idType },
+  });
+}
+
+export interface UnassignCategoryResult {
+  /** True when the category was actually removed (present before, gone after). */
+  removed: boolean;
+  /** True when the category was assigned to the product before the call. */
+  wasAssigned: boolean;
+  /**
+   * True when the category is STILL present after the write. Categories are a tree and the
+   * API keeps the ancestors of any assigned category, so a non-leaf can't be removed while a
+   * descendant of it remains — remove the more specific (leaf) category instead.
+   */
+  stillPresent: boolean;
+  /** The product's actual category ids after the change. */
+  remaining: number[];
+  /** True when the target was the product's main category before the call. */
+  wasMain: boolean;
+  /** The product's main category id after the change. */
+  newMain?: number;
+}
+
+/**
+ * Remove a category from a product. The Management API has no delete-category endpoint, so
+ * this reads the product's current categories, drops the target, and rewrites CategoryIds
+ * via the product PUT (a partial merge — other fields are untouched), then re-reads to report
+ * the actual result.
+ *
+ * Two API behaviours this accounts for:
+ *  - On write the FIRST id in CategoryIds becomes the main category, so we keep the existing
+ *    main first to preserve it (removing the main itself promotes the next remaining category).
+ *  - Categories are hierarchical and the API re-adds the ancestors of any assigned category,
+ *    so removing a non-leaf while a descendant remains is a no-op — surfaced via `stillPresent`.
+ */
+export async function unassignProductCategory(
+  productId: string,
+  categoryId: number,
+  options?: { idType?: ProductIdType },
+): Promise<UnassignCategoryResult> {
+  const product = await getProduct(productId, { idType: options?.idType, include: 'Categories' });
+  const currentIds = (product.Categories ?? []).map((c) => c.CategoryId).filter((id): id is number => id != null);
+  const mainId = product.MainCategoryId;
+
+  if (!currentIds.includes(categoryId)) {
+    return { removed: false, wasAssigned: false, stillPresent: false, remaining: currentIds, wasMain: false, newMain: mainId };
+  }
+
+  const wasMain = mainId === categoryId;
+  const remaining = currentIds.filter((id) => id !== categoryId);
+  // Keep the current main first so it's preserved; if the main was the one removed, the first
+  // remaining id becomes the new main.
+  const ordered = !wasMain && mainId != null
+    ? [mainId, ...remaining.filter((id) => id !== mainId)]
+    : remaining;
+
+  await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}`, {
+    method: 'PUT',
+    body: { CategoryIds: ordered },
+    query: { productIdType: options?.idType },
+  });
+
+  // Re-read: the API may have normalised the set (e.g. re-added ancestors), so report reality.
+  const after = await getProduct(productId, { idType: options?.idType, include: 'Categories' });
+  const actual = (after.Categories ?? []).map((c) => c.CategoryId).filter((id): id is number => id != null);
+  const stillPresent = actual.includes(categoryId);
+
+  return {
+    removed: !stillPresent,
+    wasAssigned: true,
+    stillPresent,
+    remaining: actual,
+    wasMain,
+    newMain: after.MainCategoryId,
+  };
+}
+
+/** Best-effort display name for a category (first non-empty localized name). */
+export function categoryName(category: Category): string {
+  const localized = category.Names?.find((n) => n.Content?.trim())?.Content;
+  return (localized ?? String(category.CategoryId ?? '?')).trim();
 }
 
 // ── Product relations (linking products) ───────────────────────────────────────

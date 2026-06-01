@@ -2,6 +2,7 @@ import { getMgmtApiUrl, getMerchantApiUrl } from '../config/env.ts';
 import { loadCredentials, loadCredentialsByName, type ApiCredentials } from '../config/store.ts';
 import { ApiError, noCredentials } from './errors.ts';
 import { recordResponse } from '../output/sink.ts';
+import { getActiveSignal } from './abort.ts';
 
 // Live Geins APIs, authenticated with API User credentials (see ApiCredentials):
 //   - Management API (REST):    Basic Auth + X-ApiKey
@@ -79,6 +80,7 @@ export async function mgmtRequest<T = unknown>(
     method,
     headers: mgmtHeaders(credentials),
     body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: getActiveSignal(),
   });
 
   if (!res.ok) {
@@ -129,6 +131,7 @@ export async function mgmtUpload<T = unknown>(
       'Accept': 'application/json',
     },
     body,
+    signal: getActiveSignal(),
   });
 
   if (!res.ok) {
@@ -163,6 +166,7 @@ export async function merchantQuery<T = unknown>(
       'Accept': 'application/json',
     },
     body: JSON.stringify({ query, variables }),
+    signal: getActiveSignal(),
   });
 
   if (!res.ok) {

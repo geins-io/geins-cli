@@ -3,11 +3,13 @@ import { refresh } from '../auth/login.ts';
 import { loadSession, saveSession, expiresSoon, parseJwtExp, type StoredSession } from '../auth/session.ts';
 import { ApiError, notLoggedIn } from './errors.ts';
 import { recordResponse } from '../output/sink.ts';
+import { getActiveSignal } from './abort.ts';
 
 export interface RequestOptions {
   method?: string;
   body?: unknown;
   query?: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 let cachedSession: StoredSession | null = null;
@@ -53,10 +55,12 @@ export async function request<T = unknown>(path: string, options?: RequestOption
     headers['x-account-key'] = session.accountKey;
   }
 
+  const signal = options?.signal ?? getActiveSignal();
   const res = await fetch(url.toString(), {
     method,
     headers,
     body: options?.body ? JSON.stringify(options.body) : undefined,
+    signal,
   });
 
   // Retry once on 401
@@ -74,6 +78,7 @@ export async function request<T = unknown>(path: string, options?: RequestOption
       method,
       headers,
       body: options?.body ? JSON.stringify(options.body) : undefined,
+      signal,
     });
 
     if (!retry.ok) {
