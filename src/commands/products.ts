@@ -1,5 +1,5 @@
 import { mgmtRequest } from '../api/live-client.ts';
-import { ApiError } from '../api/errors.ts';
+import { ApiError, formatError } from '../api/errors.ts';
 
 export interface LocalizableContent {
   LanguageCode: string;
@@ -252,4 +252,284 @@ export function variantSummary(product: Product): string {
     .filter((v) => v.Label || v.Value)
     .map((v) => `${v.Label ?? '?'}=${v.Value ?? '?'}`)
     .join(', ');
+}
+
+// ── Variant write operations (creating groups from existing products) ──────────
+
+/** A single variant dimension assignment, e.g. { Label: "Color", Value: "Red" }. */
+export interface VariantAssignment {
+  Label: string;
+  Value: string;
+}
+
+/** Body for POST /API/VariantGroup (Variant.Models.Write.VariantGroup). */
+export interface CreateVariantGroupInput {
+  Name?: string;
+  CollapseInLists?: boolean;
+  VariantLabels?: string[];
+}
+
+/** POST /API/VariantGroup — create an empty variant group. Returns it (incl. GroupId). */
+export async function createVariantGroup(input: CreateVariantGroupInput): Promise<VariantGroup> {
+  const envelope = await mgmtRequest<Envelope<VariantGroup>>('/API/VariantGroup', {
+    method: 'POST',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/**
+ * PUT /API/VariantGroup/{groupId}/{productId} — attach an EXISTING product to the group
+ * and set its variant dimensions in one call.
+ */
+export async function addProductToVariantGroup(
+  groupId: number,
+  productId: string,
+  dimensions: VariantAssignment[],
+  options?: { idType?: ProductIdType },
+): Promise<VariantGroup> {
+  const envelope = await mgmtRequest<Envelope<VariantGroup>>(
+    `/API/VariantGroup/${groupId}/${encodeURIComponent(productId)}`,
+    { method: 'PUT', body: dimensions, query: { productIdType: options?.idType } },
+  );
+  return envelope.Resource;
+}
+
+/** PUT /API/Variant/{productId} — update the dimensions of a product already in a group. */
+export async function setProductVariants(
+  productId: string,
+  dimensions: VariantAssignment[],
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await mgmtRequest(`/API/Variant/${encodeURIComponent(productId)}`, {
+    method: 'PUT',
+    body: dimensions,
+    query: { productIdType: options?.idType },
+  });
+}
+
+/** DELETE /API/VariantGroup/{groupId} — used for best-effort cleanup on total failure. */
+export async function deleteVariantGroup(groupId: number): Promise<void> {
+  await mgmtRequest(`/API/VariantGroup/${groupId}`, { method: 'DELETE' });
+}
+
+// ── Variant label (dimension) registry ────────────────────────────────────────
+
+/** GET /API/Variant/Labels — the registered variant labels (dimension names). */
+export async function listVariantLabels(): Promise<string[]> {
+  const envelope = await mgmtRequest<Envelope<string[]>>('/API/Variant/Labels');
+  return envelope.Resource ?? [];
+}
+
+/** POST /API/Variant/Label — register a new variant label. */
+export async function addVariantLabel(label: string): Promise<void> {
+  await mgmtRequest('/API/Variant/Label', { method: 'POST', body: { Label: label } });
+}
+
+/** PUT /API/Variant/Label/{oldLabel} — rename a variant label. */
+export async function renameVariantLabel(oldLabel: string, newLabel: string): Promise<void> {
+  await mgmtRequest(`/API/Variant/Label/${encodeURIComponent(oldLabel)}`, {
+    method: 'PUT',
+    body: { Label: newLabel },
+  });
+}
+
+/** DELETE /API/Variant/Label/{label} — remove a variant label. */
+export async function removeVariantLabel(label: string): Promise<void> {
+  await mgmtRequest(`/API/Variant/Label/${encodeURIComponent(label)}`, { method: 'DELETE' });
+}
+
+// ── Orchestrator: build a variant group from existing products ─────────────────
+
+export interface VariantGroupProductSpec {
+  id: string;
+  dimensions: VariantAssignment[];
+}
+
+export interface BuildVariantGroupInput {
+  name?: string;
+  collapseInLists?: boolean;
+  /** Declared dimensions the group tracks. If omitted, derived from the products' labels. */
+  labels?: string[];
+  products: VariantGroupProductSpec[];
+  idType?: ProductIdType;
+}
+
+export interface VariantGroupProductResult {
+  id: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface BuildVariantGroupResult {
+  groupId: number;
+  labels: string[];
+  products: VariantGroupProductResult[];
+  allSucceeded: boolean;
+  cleanedUp: boolean;
+}
+
+/**
+ * Create a variant group from existing products and assign each its dimensions.
+ * Validates (before any write) that all declared labels are registered and that every
+ * product's dimension labels are within the declared set. Then POSTs the group and PUTs
+ * each product. Keeps the group on partial success; cleans it up only if every product
+ * failed to attach. Throws before any write on validation errors.
+ */
+export async function buildVariantGroupFromProducts(
+  input: BuildVariantGroupInput,
+): Promise<BuildVariantGroupResult> {
+  if (!input.products || input.products.length === 0) {
+    throw new Error('No products supplied. Provide at least one product to group.');
+  }
+
+  // Resolve declared labels (explicit list, or the union of the products' labels).
+  const labels = input.labels && input.labels.length > 0
+    ? input.labels
+    : [...new Set(input.products.flatMap((p) => p.dimensions.map((d) => d.Label)))];
+
+  if (labels.length === 0) {
+    throw new Error('No dimensions specified. Declare at least one label (e.g. --label Color).');
+  }
+
+  // Require labels to be registered (explicit model — no auto-registration).
+  const registered = await listVariantLabels();
+  const unknown = labels.filter((l) => !registered.includes(l));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unregistered variant label(s): ${unknown.join(', ')}.\n` +
+        `Register them first, e.g.: geins product variants labels add ${unknown[0]}`,
+    );
+  }
+
+  // Every product's dimension labels must be within the declared set.
+  for (const p of input.products) {
+    const bad = p.dimensions.map((d) => d.Label).filter((l) => !labels.includes(l));
+    if (bad.length > 0) {
+      throw new Error(
+        `Product ${p.id} references undeclared label(s): ${bad.join(', ')}. ` +
+          `Declared labels: ${labels.join(', ')}`,
+      );
+    }
+  }
+
+  // Create the group, then attach each product sequentially.
+  const group = await createVariantGroup({
+    Name: input.name,
+    CollapseInLists: input.collapseInLists,
+    VariantLabels: labels,
+  });
+
+  const results: VariantGroupProductResult[] = [];
+  for (const p of input.products) {
+    try {
+      await addProductToVariantGroup(group.GroupId, p.id, p.dimensions, { idType: input.idType });
+      results.push({ id: p.id, ok: true });
+    } catch (err) {
+      results.push({ id: p.id, ok: false, error: formatError(err) });
+    }
+  }
+
+  const succeeded = results.filter((r) => r.ok).length;
+  let cleanedUp = false;
+  if (succeeded === 0) {
+    // Nothing attached — remove the orphan group (best-effort).
+    try {
+      await deleteVariantGroup(group.GroupId);
+      cleanedUp = true;
+    } catch {
+      cleanedUp = false;
+    }
+  }
+
+  return {
+    groupId: group.GroupId,
+    labels,
+    products: results,
+    allSucceeded: succeeded === input.products.length,
+    cleanedUp,
+  };
+}
+
+// ── Input parsing (shared by CLI flags and JSON body) ──────────────────────────
+
+/** Parse a JSON body ({ name, collapse, idType, labels, products:[{id,dimensions}] }). */
+export function parseVariantGroupBody(raw: unknown): BuildVariantGroupInput {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const rawProducts = Array.isArray(obj.products) ? obj.products : [];
+  const products: VariantGroupProductSpec[] = rawProducts.map((p) => {
+    const pr = (p ?? {}) as Record<string, unknown>;
+    const id = String(pr.id ?? '');
+    const dims = pr.dimensions;
+    let dimensions: VariantAssignment[] = [];
+    if (Array.isArray(dims)) {
+      dimensions = dims.map((d) => {
+        const dd = (d ?? {}) as Record<string, unknown>;
+        return { Label: String(dd.Label ?? dd.label ?? ''), Value: String(dd.Value ?? dd.value ?? '') };
+      });
+    } else if (dims && typeof dims === 'object') {
+      dimensions = Object.entries(dims as Record<string, unknown>).map(([Label, Value]) => ({
+        Label,
+        Value: String(Value),
+      }));
+    }
+    return { id, dimensions };
+  });
+
+  const idTypeNum = obj.idType != null ? Number(obj.idType) : undefined;
+  return {
+    name: obj.name != null ? String(obj.name) : undefined,
+    collapseInLists: obj.collapse != null ? Boolean(obj.collapse) : undefined,
+    labels: Array.isArray(obj.labels) ? obj.labels.map(String) : undefined,
+    products,
+    idType: idTypeNum != null && idTypeNum >= 0 && idTypeNum <= 3 ? (idTypeNum as ProductIdType) : undefined,
+  };
+}
+
+/**
+ * Parse `variants create` flags into a BuildVariantGroupInput.
+ *   --name <n>  --label <L> (repeatable)  --collapse  --idtype <0-3>
+ *   --product <id>:Label=Value,Label=Value  (repeatable)
+ */
+export function parseVariantCreateFlags(args: string[]): BuildVariantGroupInput {
+  const labels: string[] = [];
+  const products: VariantGroupProductSpec[] = [];
+  let name: string | undefined;
+  let collapseInLists: boolean | undefined;
+  let idType: ProductIdType | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case '--name': name = args[++i]; break;
+      case '--label': { const v = args[++i]; if (v) labels.push(v); break; }
+      case '--collapse': collapseInLists = true; break;
+      case '--idtype': {
+        const n = Number(args[++i]);
+        if (n >= 0 && n <= 3) idType = n as ProductIdType;
+        break;
+      }
+      case '--product': {
+        const spec = args[++i];
+        if (!spec) break;
+        // <id>:Label=Value,Label=Value   (the part after the first ':' is the dimensions)
+        const colon = spec.indexOf(':');
+        const id = colon === -1 ? spec : spec.slice(0, colon);
+        const dimsPart = colon === -1 ? '' : spec.slice(colon + 1);
+        const dimensions: VariantAssignment[] = dimsPart
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((pair) => {
+            const eq = pair.indexOf('=');
+            return eq === -1
+              ? { Label: pair, Value: '' }
+              : { Label: pair.slice(0, eq).trim(), Value: pair.slice(eq + 1).trim() };
+          });
+        products.push({ id, dimensions });
+        break;
+      }
+    }
+  }
+
+  return { name, collapseInLists, labels: labels.length > 0 ? labels : undefined, products, idType };
 }

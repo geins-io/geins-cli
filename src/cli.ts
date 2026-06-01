@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import {
@@ -38,6 +38,20 @@ const PRODUCT_HELP = [
   '  list [filters] [--json]                   Query products (alias: query); defaults to page 1',
   '  items <id> [--idtype <0-3>] [--json]      List a product\'s items (SKUs of one product)',
   '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
+  '  variants create [flags | JSON]            Create a variant group from existing products',
+  '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
+  '',
+  'variants create — group existing products as variants of each other:',
+  '  --name <name>                 Optional group name',
+  '  --label <name>                Declared dimension (repeatable); omit to derive from products',
+  '  --product <id>:L=V,L=V        A product + its dimension values (repeatable)',
+  '  --collapse                    Set CollapseInLists',
+  '  --idtype <0-3>                Id type for all product ids (default 0=internal)',
+  '  --file <path> | --body <json> | stdin   JSON body form',
+  '  --json                        Output the structured result',
+  '  Labels must be registered first (variants labels add <name>); the main product',
+  '  cannot be set via the API. JSON shape:',
+  '  { "name"?, "collapse"?, "idType"?, "labels"?: [..], "products": [ { "id", "dimensions": { "Color":"Red" } } ] }',
   '',
   'list / query filters (repeatable flags accumulate):',
   '  --brand <id>                 Brand id',
@@ -58,10 +72,36 @@ const PRODUCT_HELP = [
   '  geins product get 10001 --json',
   '  geins product items 10001',
   '  geins product variants 10001',
+  '  geins product variants labels add Color',
+  '  geins product variants create --name Tee --label Color --product 1005:Color=Red --product 1010:Color=Blue',
   '  geins product list --brand 1 --in-stock',
   '  geins product list --page 2 --batch <BatchId> --json',
   '  geins product list --account prod-elproman   # pick a live-API account (headless)',
 ].join('\n');
+
+/** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
+async function resolveBody(args: string[]): Promise<unknown> {
+  const fileIdx = args.indexOf('--file');
+  if (fileIdx !== -1 && args[fileIdx + 1]) {
+    const content = readFileSync(args[fileIdx + 1]!, 'utf-8');
+    return JSON.parse(content);
+  }
+  const bodyIdx = args.indexOf('--body');
+  if (bodyIdx !== -1 && args[bodyIdx + 1]) {
+    return JSON.parse(args[bodyIdx + 1]!);
+  }
+  // Read from stdin
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk as Buffer);
+  }
+  const raw = Buffer.concat(chunks).toString('utf-8').trim();
+  if (!raw) {
+    console.error('No input provided. Use --file <path>, --body \'<json>\', or pipe JSON to stdin.');
+    process.exit(1);
+  }
+  return JSON.parse(raw);
+}
 
 export async function run(argv: string[]): Promise<void> {
   const args = argv.slice(2);
@@ -166,30 +206,6 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         const sub = commandArgs[0]?.toLowerCase() ?? 'list';
         const subArgs = commandArgs.slice(1);
         const jsonMode = commandArgs.includes('--json');
-
-        // Helper: resolve body from --file, --body, or stdin
-        async function resolveBody(args: string[]): Promise<unknown> {
-          const fileIdx = args.indexOf('--file');
-          if (fileIdx !== -1 && args[fileIdx + 1]) {
-            const content = readFileSync(args[fileIdx + 1]!, 'utf-8');
-            return JSON.parse(content);
-          }
-          const bodyIdx = args.indexOf('--body');
-          if (bodyIdx !== -1 && args[bodyIdx + 1]) {
-            return JSON.parse(args[bodyIdx + 1]!);
-          }
-          // Read from stdin
-          const chunks: Buffer[] = [];
-          for await (const chunk of process.stdin) {
-            chunks.push(chunk as Buffer);
-          }
-          const raw = Buffer.concat(chunks).toString('utf-8').trim();
-          if (!raw) {
-            console.error('No input provided. Use --file <path>, --body \'<json>\', or pipe JSON to stdin.');
-            process.exit(1);
-          }
-          return JSON.parse(raw);
-        }
 
         switch (sub) {
           case 'list': {
@@ -528,6 +544,69 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             break;
           }
           case 'variants': {
+            const action = subArgs[0]?.toLowerCase();
+
+            // Label registry management: variants labels [add|remove|rename]
+            if (action === 'labels') {
+              const labelAction = subArgs[1]?.toLowerCase();
+              if (!labelAction || labelAction === 'list') {
+                const labels = await listVariantLabels();
+                if (jsonMode) { console.log(JSON.stringify(labels, null, 2)); break; }
+                if (labels.length === 0) console.log('No variant labels registered.');
+                else for (const l of labels) console.log(l);
+                break;
+              }
+              if (labelAction === 'add') {
+                const name = subArgs[2];
+                if (!name) { console.error('Usage: geins product variants labels add <name>'); process.exit(1); }
+                await addVariantLabel(name);
+                console.log(`✓ Registered variant label: ${name}`);
+                break;
+              }
+              if (labelAction === 'remove') {
+                const name = subArgs[2];
+                if (!name) { console.error('Usage: geins product variants labels remove <name>'); process.exit(1); }
+                await removeVariantLabel(name);
+                console.log(`✓ Removed variant label: ${name}`);
+                break;
+              }
+              if (labelAction === 'rename') {
+                const oldName = subArgs[2];
+                const newName = subArgs[3];
+                if (!oldName || !newName) { console.error('Usage: geins product variants labels rename <old> <new>'); process.exit(1); }
+                await renameVariantLabel(oldName, newName);
+                console.log(`✓ Renamed variant label: ${oldName} → ${newName}`);
+                break;
+              }
+              console.error(`Unknown labels action: ${labelAction}`);
+              console.error('Usage: geins product variants labels [list|add <name>|remove <name>|rename <old> <new>]');
+              process.exit(1);
+            }
+
+            // Create a variant group from existing products: variants create [flags | JSON]
+            if (action === 'create') {
+              const createArgs = subArgs.slice(1);
+              const hasBody = createArgs.includes('--file') || createArgs.includes('--body');
+              const hasFlags = createArgs.some((a) => ['--product', '--label', '--name', '--collapse'].includes(a));
+              const input = hasBody || !hasFlags
+                ? parseVariantGroupBody(await resolveBody(createArgs))
+                : parseVariantCreateFlags(createArgs);
+
+              const result = await buildVariantGroupFromProducts(input);
+              if (jsonMode) {
+                console.log(JSON.stringify(result, null, 2));
+              } else {
+                console.log(`Variant group ${result.groupId} (labels: ${result.labels.join(', ')})`);
+                for (const p of result.products) {
+                  console.log(`${p.ok ? '✓' : '✗'} ${p.id}${p.ok ? '' : `  ${p.error}`}`);
+                }
+                if (result.cleanedUp) console.log('All products failed to attach — the empty group was removed.');
+                console.log('\nNote: the main product cannot be set via the Management API (no MainProductId on write).');
+              }
+              if (!result.allSucceeded) process.exit(1);
+              break;
+            }
+
             const id = subArgs[0];
             if (!id) {
               console.error('Usage: geins product variants <productId> [--idtype <0-3>] [--json]');

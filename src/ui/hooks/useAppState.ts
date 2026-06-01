@@ -4,7 +4,7 @@ import { loadConfig, saveConfig } from '../../config/store.ts';
 import { startSession, endSession, setMemoryAccount } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
-export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'select-account' | 'select-copilot' | null;
+export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | null;
 
 export interface ApiKeyPicker {
   names: string[];

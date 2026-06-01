@@ -7,6 +7,7 @@ import { Welcome } from './Welcome.tsx';
 import { LoginFlow } from './LoginFlow.tsx';
 import { ApiKeyFlow } from './ApiKeyFlow.tsx';
 import { SelectApiKey } from './SelectApiKey.tsx';
+import { VariantBuilder } from './VariantBuilder.tsx';
 import { SelectAccount } from './SelectAccount.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
@@ -49,7 +50,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, type BuildVariantGroupResult } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
@@ -160,6 +161,26 @@ export function App({ version = VERSION }: { version?: string }) {
     appState.setActiveMode(null);
     appState.setApiKeyPicker(null);
   }, [appState]);
+
+  const renderVariantResult = useCallback((result: BuildVariantGroupResult) => {
+    logText(`  Variant group ${result.groupId} (labels: ${result.labels.join(', ')})`);
+    for (const p of result.products) {
+      if (p.ok) logSuccess(`  ✓ ${p.id}`);
+      else logError(`  ✗ ${p.id}  ${p.error ?? ''}`);
+    }
+    if (result.cleanedUp) logDim('  All products failed to attach — the empty group was removed.');
+    logDim('  Note: the main product cannot be set via the Management API.');
+  }, [logText, logSuccess, logError, logDim]);
+
+  const handleVariantBuilderComplete = useCallback((result: BuildVariantGroupResult) => {
+    appState.setActiveMode(null);
+    renderVariantResult(result);
+  }, [appState, renderVariantResult]);
+
+  const handleVariantBuilderCancel = useCallback((message?: string) => {
+    appState.setActiveMode(null);
+    logDim(`  ${message ?? 'Variant builder cancelled.'}`);
+  }, [appState, logDim]);
 
   const handleCommand = useCallback(async (input: string) => {
     const trimmed = input.trim();
@@ -755,6 +776,57 @@ export function App({ version = VERSION }: { version?: string }) {
               break;
             }
             case 'variants': {
+              const action = args[1]?.toLowerCase();
+
+              // variants labels [list|add|remove|rename]
+              if (action === 'labels') {
+                const labelAction = args[2]?.toLowerCase();
+                if (!labelAction || labelAction === 'list') {
+                  const labels = await listVariantLabels();
+                  if (labels.length === 0) logDim('  No variant labels registered.');
+                  else logText(`  ${labels.join(', ')}`);
+                } else if (labelAction === 'add' && args[3]) {
+                  await addVariantLabel(args[3]);
+                  logSuccess(`  ✓ Registered variant label: ${args[3]}`);
+                } else if (labelAction === 'remove' && args[3]) {
+                  await removeVariantLabel(args[3]);
+                  logSuccess(`  ✓ Removed variant label: ${args[3]}`);
+                } else if (labelAction === 'rename' && args[3] && args[4]) {
+                  await renameVariantLabel(args[3], args[4]);
+                  logSuccess(`  ✓ Renamed variant label: ${args[3]} → ${args[4]}`);
+                } else {
+                  logDim('  Usage: /product variants labels [list | add <name> | remove <name> | rename <old> <new>]');
+                }
+                break;
+              }
+
+              // variants create — interactive builder (no args) or flags/body
+              if (action === 'create') {
+                const rest = args.slice(2);
+                if (rest.length === 0) {
+                  appState.setActiveMode('variant-builder');
+                  break;
+                }
+                const input = rest.includes('--body')
+                  ? parseVariantGroupBody(JSON.parse(rest[rest.indexOf('--body') + 1] ?? '{}'))
+                  : parseVariantCreateFlags(rest);
+                appState.setLiveComponent(
+                  <Box key="product-spinner" gap={1} paddingX={1}>
+                    <Spinner type="dots" />
+                    <Text dimColor>Creating variant group...</Text>
+                  </Box>,
+                );
+                try {
+                  const result = await buildVariantGroupFromProducts(input);
+                  appState.setLiveComponent(null);
+                  renderVariantResult(result);
+                } catch (err) {
+                  appState.setLiveComponent(null);
+                  logError(`  ${formatError(err)}`);
+                }
+                break;
+              }
+
               const id = args[1];
               if (!id) { logError('  Usage: /product variants <productId>'); break; }
               appState.setLiveComponent(
@@ -789,6 +861,8 @@ export function App({ version = VERSION }: { version?: string }) {
               logText('    --brand <id> --category <id> --article <n> --sellable --in-stock --page <n>');
               logText('  /product items <id>      List a product\'s items (SKUs)');
               logText('  /product variants <id>   Show the product\'s variant group (sibling products)');
+              logText('  /product variants create        Build a group from existing products (interactive)');
+              logText('  /product variants labels        Manage variant dimension labels (list/add/remove/rename)');
               logText('');
               break;
             default:
@@ -1086,6 +1160,13 @@ export function App({ version = VERSION }: { version?: string }) {
           active={appState.apiKeyPicker.active}
           onSelect={handleApiKeySelect}
           onCancel={handleApiKeyPickerCancel}
+        />
+      )}
+
+      {appState.activeMode === 'variant-builder' && (
+        <VariantBuilder
+          onComplete={handleVariantBuilderComplete}
+          onCancel={handleVariantBuilderCancel}
         />
       )}
 

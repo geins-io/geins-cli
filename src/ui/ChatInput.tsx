@@ -51,7 +51,7 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     list: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
     query: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
     items: '<productId>',
-    variants: '<productId>',
+    variants: '<productId> | create | labels [add|remove|rename]',
   },
   api: {
     GET: '<path>',
