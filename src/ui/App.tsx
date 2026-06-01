@@ -22,7 +22,7 @@ import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
 import { ThinkingIndicator } from './ThinkingIndicator.tsx';
-import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, type StreamEvent } from '../commands/copilot.ts';
+import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, collectAttachedFiles, buildAttachmentSection, type StreamEvent } from '../commands/copilot.ts';
 import { CopilotActivity, type ActivityEntry } from './CopilotActivity.tsx';
 import {
   startSession,
@@ -50,7 +50,7 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
@@ -259,6 +259,14 @@ export function App({ version = VERSION }: { version?: string }) {
       appState.addToChat(
         <Text key={`msg-${appState.getNextKey()}`} bold>{`❯ ${trimmed}`}</Text>,
       );
+      // A dropped file arrives as an absolute path in the message. Read a preview and
+      // prepend it as context so the copilot can use the file to find/update products.
+      const attachments = await collectAttachedFiles(trimmed);
+      for (const f of attachments) {
+        logDim(`  📎 ${f.path.split('/').pop()}  (${(f.bytes / 1024).toFixed(1)} KB)`);
+      }
+      const attachmentSection = buildAttachmentSection(attachments);
+      const copilotMessage = attachmentSection ? `${attachmentSection}\n\n${trimmed}` : trimmed;
       const copilotCfg = await getCopilotConfig();
       const providerLabel = copilotCfg
         ? copilotCfg.model ? `${copilotCfg.command} · ${copilotCfg.model}` : copilotCfg.command
@@ -304,7 +312,7 @@ export function App({ version = VERSION }: { version?: string }) {
           }
         };
 
-        const rawBuffer = await chatStream(trimmed, (chunk) => {
+        const rawBuffer = await chatStream(copilotMessage, (chunk) => {
           streamBuffer = chunk;
           const visible = displayText(streamBuffer);
           if (visible) {
@@ -979,6 +987,16 @@ export function App({ version = VERSION }: { version?: string }) {
                 logSuccess(`  ✓ Uploaded ${r.imageName}${f.primary ? ' (primary)' : ''} to product ${id}`);
                 break;
               }
+              if (imgAction === 'add-existing' || imgAction === 'link') {
+                const id = imgArgs[1]; const name = imgArgs[2];
+                if (!id || !name) { logError('  Usage: /product images add-existing <productId> <imageName> [--idtype <0-3>]'); break; }
+                const f = parseImgFlags(imgArgs.slice(3));
+                spin(`Linking ${name} to ${id}...`);
+                const r = await addExistingProductImage(id, name, { idType: f.idType });
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Linked existing image ${r.FileName ?? name} to product ${id}`);
+                break;
+              }
               if (imgAction === 'delete' || imgAction === 'remove') {
                 const id = imgArgs[1]; const name = imgArgs[2];
                 if (!id || !name) { logError('  Usage: /product images delete <productId> <imageName>'); break; }
@@ -1086,6 +1104,52 @@ export function App({ version = VERSION }: { version?: string }) {
               if (relations.length === 0) { logDim('  No related products.'); break; }
               for (const r of relations) logText(`  ${r.RelatedProductId}  (relation type ${r.RelationTypeId ?? '?'})`);
               logDim(`  ${relations.length} related product${relations.length === 1 ? '' : 's'}`);
+              break;
+            }
+            case 'brands':
+            case 'brand': {
+              const bArgs = args.slice(1);
+              const action = bArgs[0]?.toLowerCase();
+              const flagVal = (flag: string) => { const i = bArgs.indexOf(flag); return i !== -1 ? bArgs[i + 1] : undefined; };
+              const parseDesc = (): LocalizableContent[] | undefined => {
+                const parts = bArgs.flatMap((a, i) => (bArgs[i - 1] === '--desc' ? [a] : []));
+                if (parts.length === 0) return undefined;
+                return parts.map((p) => { const c = p.indexOf(':'); return { LanguageCode: c === -1 ? p : p.slice(0, c), Content: c === -1 ? '' : p.slice(c + 1) }; });
+              };
+              if (action === 'get') {
+                const bid = Number(bArgs[1]);
+                if (Number.isNaN(bid)) { logError('  Usage: /product brands get <id>'); break; }
+                const brand = await getBrand(bid);
+                logText(`  ${brand.BrandId}  ${brandName(brand)}${brand.ExternalId ? `  (ext: ${brand.ExternalId})` : ''}`);
+                for (const d of brand.Descriptions ?? []) logDim(`    ${d.LanguageCode}: ${d.Content}`);
+                break;
+              }
+              if (action === 'create' || action === 'add') {
+                const name = flagVal('--name');
+                if (!name) { logError('  Usage: /product brands create --name <n> [--external-id <id>] [--desc <code>:<text>]'); break; }
+                const input: BrandWrite = { Name: name, ExternalId: flagVal('--external-id'), Descriptions: parseDesc() };
+                const brand = await createBrand(input);
+                logSuccess(`  ✓ Created brand ${brand.BrandId}: ${brandName(brand)}`);
+                break;
+              }
+              if (action === 'update') {
+                const bid = Number(bArgs[1]);
+                if (Number.isNaN(bid)) { logError('  Usage: /product brands update <id> [--name <n>] [--external-id <id>] [--desc <code>:<text>]'); break; }
+                const brand = await updateBrand(bid, { Name: flagVal('--name'), ExternalId: flagVal('--external-id'), Descriptions: parseDesc() });
+                logSuccess(`  ✓ Updated brand ${brand.BrandId}: ${brandName(brand)}`);
+                break;
+              }
+              if (action === 'delete' || action === 'remove') {
+                const bid = Number(bArgs[1]);
+                if (Number.isNaN(bid)) { logError('  Usage: /product brands delete <id>'); break; }
+                await deleteBrand(bid);
+                logSuccess(`  ✓ Deleted brand ${bid}`);
+                break;
+              }
+              const brands = await queryBrands();
+              if (brands.length === 0) { logDim('  No brands.'); break; }
+              for (const b of brands) logText(`  ${b.BrandId}  ${brandName(b)}${b.ExternalId ? `  (ext: ${b.ExternalId})` : ''}`);
+              logDim(`  ${brands.length} brand${brands.length === 1 ? '' : 's'}`);
               break;
             }
             case 'parameters':
@@ -1226,7 +1290,8 @@ export function App({ version = VERSION }: { version?: string }) {
               logText('  /product variants <id>   Show the product\'s variant group (sibling products)');
               logText('  /product variants create        Build a group from existing products (interactive)');
               logText('  /product variants labels        Manage variant dimension labels (list/add/remove/rename)');
-              logText('  /product images <id>     List images; add <id> <file|url> [--primary] | delete | set-primary | reorder');
+              logText('  /product images <id>     List images; add <id> <file|url> [--primary] | add-existing <id> <name> | delete | set-primary | reorder');
+              logText('  /product brands          Manage brands (list/get/create/update/delete)');
               logText('  /product relation-types  Manage relation types (list/get/add/update/delete)');
               logText('  /product relations <id>  List relations; link/unlink <id> <relationTypeId> <relatedId...>');
               logText('  /product parameters <id> List values; set/remove/get <id> <paramId>; defs|groups|predefined ...');

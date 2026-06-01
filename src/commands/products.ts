@@ -682,6 +682,26 @@ export async function addProductImage(
   return { ...result, imageName };
 }
 
+/**
+ * Associate an already-uploaded image with a product by file name, without re-uploading
+ * any bytes: PUT /API/Product/{id}/ImageRelation/{imageName}. The image file must already
+ * exist in the account's media library; use `addProductImage` to upload new bytes.
+ */
+export async function addExistingProductImage(
+  id: string,
+  imageName: string,
+  options?: { idType?: ProductIdType },
+): Promise<{ FileName?: string }> {
+  const envelope = await mgmtRequest<Envelope<{ FileName?: string }>>(
+    `/API/Product/${encodeURIComponent(id)}/ImageRelation/${encodeURIComponent(imageName)}`,
+    {
+      method: 'PUT',
+      query: { productIdType: options?.idType },
+    },
+  );
+  return envelope.Resource ?? {};
+}
+
 /** DELETE /API/Product/{id}/Image/{imageName}. */
 export async function deleteProductImage(
   id: string,
@@ -772,6 +792,76 @@ export async function updateRelationType(id: number, input: { Name?: string; Ord
 /** DELETE /API/Product/RelationTypes/{id} — delete a relation type. */
 export async function deleteRelationType(id: number): Promise<void> {
   await mgmtRequest(`/API/Product/RelationTypes/${id}`, { method: 'DELETE' });
+}
+
+// ── Brands (account-wide registry) ─────────────────────────────────────────────
+
+/** A brand (Brand.Models.Read.Brand). */
+export interface Brand {
+  BrandId?: number;
+  Name?: string;
+  ExternalId?: string;
+  Descriptions?: LocalizableContent[];
+}
+
+/** The writable shape of a brand (Brand.Models.Write.Brand). */
+export interface BrandWrite {
+  Name: string;
+  ExternalId?: string;
+  Descriptions?: LocalizableContent[];
+}
+
+/** A brand query body (Brand.Models.BrandQuery). All fields optional. */
+export interface BrandQuery {
+  CreatedAfter?: string;
+  BrandIds?: number[];
+  ExternalIds?: string[];
+}
+
+/** POST /API/Brand/Query — list/query brands (an empty body returns all). */
+export async function queryBrands(query: BrandQuery = {}): Promise<Brand[]> {
+  const envelope = await mgmtRequest<Envelope<Brand[]>>('/API/Brand/Query', {
+    method: 'POST',
+    body: query,
+  });
+  return envelope.Resource ?? [];
+}
+
+/** GET /API/Brand/{id} — one brand. */
+export async function getBrand(id: number): Promise<Brand> {
+  const envelope = await mgmtRequest<Envelope<Brand>>(`/API/Brand/${id}`);
+  return envelope.Resource;
+}
+
+/** POST /API/Brand — create a brand. */
+export async function createBrand(input: BrandWrite): Promise<Brand> {
+  const envelope = await mgmtRequest<Envelope<Brand>>('/API/Brand', { method: 'POST', body: input });
+  return envelope.Resource;
+}
+
+/**
+ * PUT /API/Brand/{id} — update a brand. The write model requires Name, so we fetch the
+ * current brand and merge the changes to avoid clobbering unspecified fields.
+ */
+export async function updateBrand(id: number, changes: Partial<BrandWrite>): Promise<Brand> {
+  const current = await getBrand(id);
+  const body: BrandWrite = {
+    Name: changes.Name ?? current.Name ?? '',
+    ExternalId: changes.ExternalId ?? current.ExternalId,
+    Descriptions: changes.Descriptions ?? current.Descriptions,
+  };
+  const envelope = await mgmtRequest<Envelope<Brand>>(`/API/Brand/${id}`, { method: 'PUT', body });
+  return envelope.Resource;
+}
+
+/** DELETE /API/Brand/{id} — delete a brand. */
+export async function deleteBrand(id: number): Promise<void> {
+  await mgmtRequest(`/API/Brand/${id}`, { method: 'DELETE' });
+}
+
+/** Best-effort display name for a brand. */
+export function brandName(brand: Brand): string {
+  return (brand.Name ?? brand.ExternalId ?? String(brand.BrandId ?? '?')).trim();
 }
 
 // ── Product relations (linking products) ───────────────────────────────────────

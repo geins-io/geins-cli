@@ -93,6 +93,7 @@ export function cliHelpSpec(version: string): CliHelpSpec {
           { name: 'variants labels', usage: 'product variants labels [list | add <name> | remove <name> | rename <old> <new>]', description: 'Manage variant dimension labels (the registry of dimension names).', examples: ['geins product variants labels add Color'] },
           { name: 'images', usage: 'product images <id> [--json]', description: "List a product's images (★ = primary, lowest Order).", examples: ['geins product images 10001'] },
           { name: 'images add', usage: 'product images add <id> <file|url> [--name <n>] [--primary] [--position <n>] [--idtype <0-3>]', description: 'Upload an image (jpg/png/gif) from a local file path or an http(s) URL.', examples: ['geins product images add 10001 ./hero.jpg --primary'] },
+          { name: 'images add-existing', usage: 'product images add-existing <id> <imageName> [--idtype <0-3>]', description: 'Link an already-uploaded image (by file name) to a product without re-uploading bytes (PUT /API/Product/{id}/ImageRelation/{imageName}).', examples: ['geins product images add-existing 10001 hero.jpg'] },
           { name: 'images delete', usage: 'product images delete <id> <imageName>', description: 'Remove an image.' },
           { name: 'images set-primary', usage: 'product images set-primary <id> <imageName>', description: 'Make an image the primary one.' },
           { name: 'images reorder', usage: 'product images reorder <id> <imageName> <position>', description: "Change an image's position." },

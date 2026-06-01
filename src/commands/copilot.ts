@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
 import { getOutputDir, ensureOutputDir } from '../output/sink.ts';
+import { existsSync, statSync } from 'node:fs';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -143,6 +144,27 @@ const SYSTEM_CONTEXT = [
   '  the relevant geins command using --json, then USE YOUR OWN file tools (Bash, Write) to build the file.',
   '- Example (CSV of products): run `geins product list --json`, parse it, and Write "products.csv"',
   '  (a header row + one row per product) into the output folder.',
+  '',
+  'ATTACHED FILES — when the user drops/provides a local file path:',
+  '- The message may start with an [ATTACHED FILES] section listing an absolute path + a short preview.',
+  '  The user dropped a local file (CSV, JSON, spreadsheet export, plain text) — it is just DATA. Do',
+  '  whatever the user asks with it; the operation is driven by their instruction, not by the file type.',
+  '- ALWAYS read the FULL file from its absolute path with your file tools (Read/Bash) before acting —',
+  '  the preview is only the first lines. Infer the columns/shape from the preview first.',
+  '- If the user dropped a file with NO clear instruction (or an ambiguous one), do NOT guess: summarize',
+  '  what the file contains (columns, row count, a sample) and ask what they want to do with it.',
+  '- The intent can be anything. Common ones, as a guide (not a fixed menu):',
+  '    · find / match — map rows to existing products by the strongest key available: article number',
+  '      (`geins product list --article <n> --json`), id (`geins product get <id> --json`), then name/brand;',
+  '      report matched vs unmatched rows.',
+  '    · update — derive per-product changes from the file and apply via the right geins command',
+  '      (`geins management PUT /API/Product/... --body \'<json>\'`, `geins product parameters set ...`, etc.).',
+  '    · create / import — build new products/variants/relations/images from the rows.',
+  '    · export / transform — produce a derived file (CSV, JSON, summary) in the output folder.',
+  '    · compare / validate — diff the file against the catalog and report discrepancies.',
+  '- Before any WRITE (update/create/delete/import), PROPOSE the changes first (show what will change) and',
+  '  apply only AFTER the user confirms. Read-only tasks (find/export/compare) need no confirmation.',
+  '- For large files, work in batches and summarize progress — do not paste the whole file back.',
   '',
   'WORKFLOWS — only when explicitly requested:',
   '- Do NOT create, update, or run workflows unless the user explicitly says "workflow" (or clearly asks',
@@ -508,6 +530,105 @@ export async function chatStream(
   await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
   await processMemoryBlocks(cleaned);
   return buffer;
+}
+
+// ── Dropped-file attachments ─────────────────────────────────────────────────
+// When the user drops a file into the chat, its absolute path arrives in the
+// message. We read a small preview and prepend it to the copilot prompt so the
+// model immediately knows the file's shape (and the path to read it in full),
+// which also lets non-agentic providers use it without a file tool.
+
+const MAX_PREVIEW_BYTES = 8000;
+const MAX_PREVIEW_LINES = 60;
+
+export interface AttachedFile {
+  path: string;
+  bytes: number;
+  preview: string;
+  previewLines: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** Strip quotes/escapes, resolve file:// and ~, yielding a real filesystem path. */
+function normalizeAttachmentPath(raw: string): string {
+  let p = raw.trim().replace(/^['"]|['"]$/g, '').replace(/\\ /g, ' ');
+  if (/^file:\/\//i.test(p)) {
+    try { p = decodeURIComponent(new URL(p).pathname); } catch { /* leave as-is */ }
+  } else if (p.startsWith('~/') && process.env.HOME) {
+    p = process.env.HOME + p.slice(1);
+  }
+  return p;
+}
+
+/** Pull candidate local paths (quoted or bare absolute/`~` paths) out of a message. */
+function extractPathCandidates(message: string): string[] {
+  const out = new Set<string>();
+  const quoted = /"([^"]+)"|'([^']+)'/g;
+  let m: RegExpExecArray | null;
+  while ((m = quoted.exec(message)) !== null) {
+    const v = m[1] ?? m[2] ?? '';
+    if (/^(?:\/|~\/|file:\/\/)/.test(v)) out.add(v);
+  }
+  const bare = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s'"])+/g;
+  while ((m = bare.exec(message)) !== null) out.add(m[0]);
+  return [...out];
+}
+
+/**
+ * Find local files referenced in a copilot message and read a bounded preview of each.
+ * Bogus matches (pasted URLs, non-existent paths, directories) are silently skipped —
+ * only real, readable files are returned.
+ */
+export async function collectAttachedFiles(message: string): Promise<AttachedFile[]> {
+  const files: AttachedFile[] = [];
+  const seen = new Set<string>();
+  for (const cand of extractPathCandidates(message)) {
+    const path = normalizeAttachmentPath(cand);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    try {
+      if (!existsSync(path)) continue;
+      const st = statSync(path);
+      if (!st.isFile()) continue;
+      // Read only the head so a huge file doesn't load into memory.
+      const head = new Uint8Array(
+        await Bun.file(path).slice(0, MAX_PREVIEW_BYTES + 1).arrayBuffer(),
+      );
+      const binary = head.subarray(0, Math.min(4096, head.length)).includes(0);
+      let preview = '';
+      let previewLines = 0;
+      let truncated = st.size > head.length;
+      if (!binary) {
+        const text = new TextDecoder().decode(head.subarray(0, MAX_PREVIEW_BYTES));
+        const lines = text.split('\n');
+        const limited = lines.slice(0, MAX_PREVIEW_LINES);
+        if (limited.length < lines.length) truncated = true;
+        previewLines = limited.length;
+        preview = limited.join('\n');
+      }
+      files.push({ path, bytes: st.size, preview, previewLines, truncated, binary });
+    } catch {
+      // Unreadable — skip.
+    }
+  }
+  return files;
+}
+
+/** Render an [ATTACHED FILES] prompt section (empty string when there are none). */
+export function buildAttachmentSection(files: AttachedFile[]): string {
+  if (files.length === 0) return '';
+  const parts = ['[ATTACHED FILES]'];
+  for (const f of files) {
+    const kb = (f.bytes / 1024).toFixed(1);
+    parts.push('', `File: ${f.path}  (${kb} KB)`);
+    if (f.binary) {
+      parts.push('[binary file — read it with the appropriate tool]');
+    } else {
+      parts.push(`Preview (first ${f.previewLines} lines${f.truncated ? ', truncated — read the full file from the path above' : ''}):`, '```', f.preview, '```');
+    }
+  }
+  return parts.join('\n');
 }
 
 export function extractGeinsCommands(text: string): string[] {

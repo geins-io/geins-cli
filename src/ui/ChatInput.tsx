@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
+import { existsSync } from 'node:fs';
 
 const COMMANDS: Record<string, string> = {
   help: 'Show available commands',
@@ -24,7 +25,7 @@ const COMMANDS: Record<string, string> = {
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
-  product: ['get', 'list', 'query', 'items', 'variants', 'images', 'relation-types', 'relations', 'parameters', 'help'],
+  product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'relation-types', 'relations', 'parameters', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
@@ -53,6 +54,7 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     items: '<productId>',
     variants: '<productId> | create | labels [add|remove|rename]',
     images: '<productId> | add <id> <file|url> | delete | set-primary | reorder',
+    brands: '[list | get <id> | create --name <n> [--external-id <id>] | update <id> | delete <id>]',
     'relation-types': '[list | get <id> | add <name> | update <id> | delete <id>]',
     relations: '<productId> | link <id> <typeId> <relatedId...> | unlink ...',
     parameters: '<productId> | get <id> <paramId> | set <id> <paramId> <value> | remove | batch | defs | groups | predefined',
@@ -82,9 +84,22 @@ const BARE_HINTS: Record<string, string> = {
 
 const COMMAND_NAMES = Object.keys(COMMANDS);
 
-// Matches an absolute image path as terminals insert it on drag-and-drop (with
-// backslash-escaped spaces, optional file:// scheme). Used to show a compact chip.
-const DROPPED_IMAGE_RE = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s])*\.(?:png|jpe?g|gif|webp|bmp|heic|svg)/gi;
+// Matches an absolute path as terminals insert it on drag-and-drop (with backslash-escaped
+// spaces, optional file:// scheme) that ends in a file extension. Used to show a compact chip
+// for any dropped file — images get an [image] chip, everything else a [file: name] chip.
+const DROPPED_PATH_RE = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s])*\.[A-Za-z0-9]{1,12}/gi;
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|heic|svg)$/i;
+
+/** Strip surrounding quotes/escapes and resolve file:// and ~ to a real filesystem path. */
+function normalizeDroppedPath(match: string): string {
+  let p = match.replace(/^['"]|['"]$/g, '').replace(/\\ /g, ' ');
+  if (/^file:\/\//i.test(p)) {
+    try { p = decodeURIComponent(new URL(p).pathname); } catch { /* leave as-is */ }
+  } else if (p.startsWith('~/') && process.env.HOME) {
+    p = process.env.HOME + p.slice(1);
+  }
+  return p;
+}
 
 interface ChatInputProps {
   disabled?: boolean;
@@ -225,13 +240,19 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
     // Single-line field: collapse newlines/tabs (e.g. from a multiline paste) to spaces
     // so the layout and the prompt icon don't break.
     let next = raw.replace(/[\r\n\t]+/g, ' ');
-    // A drag-drop/paste inserts many chars at once; only then collapse image paths into
-    // a chip (and guard the regex behind a cheap check so big pastes don't stall).
+    // A drag-drop/paste inserts many chars at once; only then collapse dropped file paths
+    // into a chip (and guard the regex behind a cheap check so big pastes don't stall).
     const jumped = next.length - prevValueRef.current.length > 1;
-    if (jumped && next.includes('/') && /\.(?:png|jpe?g|gif|webp|bmp|heic|svg)/i.test(next)) {
-      next = next.replace(DROPPED_IMAGE_RE, (match) => {
-        const realPath = match.replace(/^['"]|['"]$/g, '').replace(/\\ /g, ' ');
-        const placeholder = `[image #${++attachCounter.current}]`;
+    if (jumped && /(?:~\/|\/)[^\s]*\.[A-Za-z0-9]/.test(next)) {
+      next = next.replace(DROPPED_PATH_RE, (match) => {
+        const realPath = normalizeDroppedPath(match);
+        // Only collapse paths that point at a real local file — leaves pasted URLs and
+        // incidental "/foo.bar" text untouched.
+        if (!existsSync(realPath)) return match;
+        const name = realPath.split('/').pop() || realPath;
+        const placeholder = IMAGE_EXT_RE.test(name)
+          ? `[image #${++attachCounter.current}]`
+          : `[file #${++attachCounter.current}: ${name}]`;
         attachmentsRef.current.set(placeholder, realPath);
         return placeholder;
       });

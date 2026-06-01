@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
@@ -43,9 +43,11 @@ const PRODUCT_HELP = [
   '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
   '  images <id> [--json]                      List a product\'s images',
   '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   Upload an image (jpg/png/gif)',
+  '  images add-existing <id> <imageName>      Link an already-uploaded image to the product (no upload)',
   '  images delete <id> <imageName>            Remove an image',
   '  images set-primary <id> <imageName>       Make an image the primary one',
   '  images reorder <id> <imageName> <pos>     Change an image\'s position',
+  '  brands [list|get <id>|create --name <n> [--external-id <id>] [--desc <code>:<text>]|update <id> ...|delete <id>]   Manage brands',
   '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
   '  relations <id> [--json]                   List a product\'s related products',
   '  relations link <id> <relationTypeId> <relatedId...>     Link related products',
@@ -99,6 +101,9 @@ const PRODUCT_HELP = [
   '  geins product images 10001',
   '  geins product images add 10001 ./hero.jpg --primary',
   '  geins product images add 10001 https://example.com/img.png --name img.png',
+  '  geins product images add-existing 10001 hero.jpg',
+  '  geins product brands',
+  '  geins product brands create --name Nike --external-id nike',
   '  geins product relation-types add Accessories',
   '  geins product relations link 10001 1 10002 10003',
   '  geins product parameters 10001',
@@ -710,6 +715,19 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               else console.log(`✓ Uploaded ${r.imageName}${f.primary ? ' (primary)' : ''} to product ${id}`);
               break;
             }
+            if (action === 'add-existing' || action === 'link') {
+              const id = subArgs[1];
+              const name = subArgs[2];
+              if (!id || !name) {
+                console.error('Usage: geins product images add-existing <productId> <imageName> [--idtype <0-3>]');
+                process.exit(1);
+              }
+              const f = parseImgFlags(subArgs.slice(3));
+              const r = await addExistingProductImage(id, name, { idType: f.idType });
+              if (jsonMode) console.log(JSON.stringify(r, null, 2));
+              else console.log(`✓ Linked existing image ${r.FileName ?? name} to product ${id}`);
+              break;
+            }
             if (action === 'delete' || action === 'remove') {
               const id = subArgs[1];
               const name = subArgs[2];
@@ -832,6 +850,56 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             if (relations.length === 0) { console.log('No related products.'); break; }
             for (const r of relations) console.log(`${r.RelatedProductId}  (relation type ${r.RelationTypeId ?? '?'})`);
             console.log(`\n${relations.length} related product${relations.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'brands':
+          case 'brand': {
+            const action = subArgs[0]?.toLowerCase();
+            const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
+            // Repeatable --desc <code>:<text> → localized descriptions.
+            const parseDesc = (): LocalizableContent[] | undefined => {
+              const parts = subArgs.flatMap((a, i) => (subArgs[i - 1] === '--desc' ? [a] : []));
+              if (parts.length === 0) return undefined;
+              return parts.map((p) => { const c = p.indexOf(':'); return { LanguageCode: c === -1 ? p : p.slice(0, c), Content: c === -1 ? '' : p.slice(c + 1) }; });
+            };
+
+            if (action === 'get') {
+              const bid = Number(subArgs[1]);
+              if (Number.isNaN(bid)) { console.error('Usage: geins product brands get <id> [--json]'); process.exit(1); }
+              const brand = await getBrand(bid);
+              if (jsonMode) { console.log(JSON.stringify(brand, null, 2)); break; }
+              console.log(`${brand.BrandId}  ${brandName(brand)}${brand.ExternalId ? `  (ext: ${brand.ExternalId})` : ''}`);
+              for (const d of brand.Descriptions ?? []) console.log(`  ${d.LanguageCode}: ${d.Content}`);
+              break;
+            }
+            if (action === 'create' || action === 'add') {
+              const name = flagVal('--name');
+              if (!name) { console.error('Usage: geins product brands create --name <n> [--external-id <id>] [--desc <code>:<text>]'); process.exit(1); }
+              const input: BrandWrite = { Name: name, ExternalId: flagVal('--external-id'), Descriptions: parseDesc() };
+              const brand = await createBrand(input);
+              console.log(`✓ Created brand ${brand.BrandId}: ${brandName(brand)}`);
+              break;
+            }
+            if (action === 'update') {
+              const bid = Number(subArgs[1]);
+              if (Number.isNaN(bid)) { console.error('Usage: geins product brands update <id> [--name <n>] [--external-id <id>] [--desc <code>:<text>]'); process.exit(1); }
+              const brand = await updateBrand(bid, { Name: flagVal('--name'), ExternalId: flagVal('--external-id'), Descriptions: parseDesc() });
+              console.log(`✓ Updated brand ${brand.BrandId}: ${brandName(brand)}`);
+              break;
+            }
+            if (action === 'delete' || action === 'remove') {
+              const bid = Number(subArgs[1]);
+              if (Number.isNaN(bid)) { console.error('Usage: geins product brands delete <id>'); process.exit(1); }
+              await deleteBrand(bid);
+              console.log(`✓ Deleted brand ${bid}`);
+              break;
+            }
+            // list (default)
+            const brands = await queryBrands();
+            if (jsonMode) { console.log(JSON.stringify(brands, null, 2)); break; }
+            if (brands.length === 0) { console.log('No brands.'); break; }
+            for (const b of brands) console.log(`${b.BrandId}  ${brandName(b)}${b.ExternalId ? `  (ext: ${b.ExternalId})` : ''}`);
+            console.log(`\n${brands.length} brand${brands.length === 1 ? '' : 's'}`);
             break;
           }
           case 'parameters':
