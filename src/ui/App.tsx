@@ -301,7 +301,7 @@ export function App({ version = VERSION }: { version?: string }) {
             renderFollowup();
 
             const followupRaw = await chatStream(
-              'Here are the command results. Summarize what you found and answer my original question.',
+              `The command results are above. Answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`,
               (chunk) => {
                 const visible = chunk.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
                 if (visible) {

@@ -512,8 +512,36 @@ export function extractGeinsCommands(text: string): string[] {
   return commands;
 }
 
+/**
+ * Split a command line into argv, respecting single/double quotes and stripping them,
+ * so `--body '{"a": 1}'` becomes one argument (`{"a": 1}`) instead of being split on
+ * spaces with the quotes left literal. A naive whitespace split breaks JSON bodies.
+ */
+export function tokenizeArgs(input: string): string[] {
+  const tokens: string[] = [];
+  let cur = '';
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (const ch of input) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) { tokens.push(cur); cur = ''; started = false; }
+    } else {
+      cur += ch;
+      started = true;
+    }
+  }
+  if (started) tokens.push(cur);
+  return tokens;
+}
+
 export async function executeGeinsCommand(command: string): Promise<{ output: string; exitCode: number }> {
-  const args = command.replace(/^geins\s+/, '').split(/\s+/);
+  const args = tokenizeArgs(command.replace(/^geins\s+/, ''));
   const proc = Bun.spawn(['geins', ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -525,8 +553,23 @@ export async function executeGeinsCommand(command: string): Promise<{ output: st
   return { output: (stdout || stderr).trim(), exitCode };
 }
 
+/**
+ * Max characters of a single command's output kept in the conversation history that
+ * is re-sent to the model each turn. Huge dumps (e.g. `product list --json` for a full
+ * catalog) would otherwise blow the token budget and evict the user's original question.
+ * The full output is still shown in the TUI and written to the output folder.
+ */
+const MAX_TOOL_OUTPUT_CHARS = 20000;
+
 export async function addToolResult(command: string, output: string): Promise<void> {
-  const content = `I ran \`${command}\` and got this output:\n\n${output}`;
+  let kept = output;
+  if (output.length > MAX_TOOL_OUTPUT_CHARS) {
+    const omitted = output.length - MAX_TOOL_OUTPUT_CHARS;
+    kept =
+      output.slice(0, MAX_TOOL_OUTPUT_CHARS) +
+      `\n\n…[truncated ${omitted} of ${output.length} chars. The full result was written to the output folder — read it from your working directory if you need all of it.]`;
+  }
+  const content = `I ran \`${command}\` and got this output:\n\n${kept}`;
   await appendMessage({ role: 'user', content });
   await trackApiResponse(command, output);
 }
