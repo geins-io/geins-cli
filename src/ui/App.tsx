@@ -204,6 +204,16 @@ export function App({ version = VERSION }: { version?: string }) {
         let streamBuffer = '';
         const activityLog: ActivityEntry[] = [];
 
+        // Text shown for a model turn: drop <think> blocks and the ```bash``` command
+        // blocks (those run and show as "⟳ <cmd>", so repeating them is just noise).
+        const displayText = (s: string) =>
+          s
+            .replace(/<think>[\s\S]*?<\/think>/g, '')
+            .replace(/<think>[\s\S]*$/, '')
+            .replace(/```(?:bash|sh|shell)?[\s\S]*?```/g, '')
+            .replace(/```(?:bash|sh|shell)?[\s\S]*$/, '')
+            .trim();
+
         const renderActivity = () => {
           appState.setLiveComponent(
             <CopilotActivity
@@ -230,7 +240,7 @@ export function App({ version = VERSION }: { version?: string }) {
 
         const rawBuffer = await chatStream(trimmed, (chunk) => {
           streamBuffer = chunk;
-          const visible = streamBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+          const visible = displayText(streamBuffer);
           if (visible) {
             const textIdx = activityLog.findIndex(e => e.kind === 'text');
             if (textIdx >= 0) {
@@ -262,31 +272,43 @@ export function App({ version = VERSION }: { version?: string }) {
             />,
           );
 
-          const commands = extractGeinsCommands(cleaned);
-          for (const cmd of commands) {
-            logDim(`  ⟳ running: ${cmd}`);
-            appState.setLiveComponent(
-              <Box key="cmd-spinner" gap={1} paddingX={1}>
-                <Spinner type="dots" />
-                <Text dimColor>{cmd}</Text>
-              </Box>,
-            );
-            const result = await executeGeinsCommand(cmd);
-            appState.setLiveComponent(null);
-            await addToolResult(cmd, result.output);
-            if (result.output) {
+          // Agentic loop: run any commands the model emitted, feed the results back,
+          // and let it continue — it may emit MORE commands (e.g. check labels, then
+          // create). Repeat until a response has no commands or we hit the cap.
+          const MAX_ROUNDS = 6;
+          let pending = cleaned;
+          for (let round = 0; round < MAX_ROUNDS; round++) {
+            const commands = extractGeinsCommands(pending);
+            if (commands.length === 0) break;
+
+            for (const cmd of commands) {
+              appState.setLiveComponent(
+                <Box key="cmd-spinner" gap={1} paddingX={1}>
+                  <Spinner type="dots" />
+                  <Text dimColor>{cmd}</Text>
+                </Box>,
+              );
+              const result = await executeGeinsCommand(cmd);
+              appState.setLiveComponent(null);
+              await addToolResult(cmd, result.output);
+              // Collapse long outputs to a one-line summary (the model still gets the
+              // full result, and it's written to the output folder). Short ones show.
+              const lines = result.output ? result.output.split('\n').length : 0;
+              const collapse = result.output.length > 800 || lines > 12;
               appState.addToChat(
                 <Box key={`cmd-${appState.getNextKey()}`} flexDirection="column">
                   <Text dimColor>{`  ⟳ ${cmd}`}</Text>
-                  <Markdown>{result.output}</Markdown>
+                  {result.output
+                    ? (collapse
+                        ? <Text dimColor>{`     ⟐ ${lines} lines · ${result.output.length} chars (collapsed)`}</Text>
+                        : <Markdown>{result.output}</Markdown>)
+                    : null}
                 </Box>,
               );
             }
-          }
 
-          if (commands.length > 0) {
+            const lastRound = round === MAX_ROUNDS - 1;
             const followupLog: ActivityEntry[] = [];
-
             const renderFollowup = () => {
               appState.setLiveComponent(
                 <CopilotActivity
@@ -297,13 +319,16 @@ export function App({ version = VERSION }: { version?: string }) {
                 />,
               );
             };
-
             renderFollowup();
 
+            const followupPrompt = lastRound
+              ? `The command results are above. Do NOT output more commands now — give your final answer to my original question and summarize what you found.\n\nMy original question was: ${trimmed}`
+              : `The command results are above. If you need to run more commands, output them in a bash block. Otherwise, answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`;
+
             const followupRaw = await chatStream(
-              `The command results are above. Answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`,
+              followupPrompt,
               (chunk) => {
-                const visible = chunk.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').trim();
+                const visible = displayText(chunk);
                 if (visible) {
                   const textIdx = followupLog.findIndex(e => e.kind === 'text');
                   if (textIdx >= 0) {
@@ -326,8 +351,11 @@ export function App({ version = VERSION }: { version?: string }) {
               },
             );
             appState.setLiveComponent(null);
+            // Keep bash blocks here — `pending` is scanned for the next round's commands.
             const followupCleaned = followupRaw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            if (followupCleaned) {
+            // Only commit a visible card if there's prose/tool activity (a bash-only
+            // round produces no display text and shouldn't leave an empty card).
+            if (followupLog.length > 0) {
               const finalFollowup = followupLog.map(e => ({ ...e, done: true }));
               const ctx2 = await getContextUsageAsync();
               appState.addToChat(
@@ -339,6 +367,7 @@ export function App({ version = VERSION }: { version?: string }) {
                 />,
               );
             }
+            pending = lastRound ? '' : followupCleaned;
           }
         }
       } catch (err) {

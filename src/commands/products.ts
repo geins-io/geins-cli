@@ -367,6 +367,8 @@ export interface BuildVariantGroupResult {
   products: VariantGroupProductResult[];
   allSucceeded: boolean;
   cleanedUp: boolean;
+  /** Caveat surfaced in the result (also in --json) so callers don't over-promise. */
+  note: string;
 }
 
 /**
@@ -448,6 +450,7 @@ export async function buildVariantGroupFromProducts(
     products: results,
     allSucceeded: succeeded === input.products.length,
     cleanedUp,
+    note: 'The main product cannot be set via the Management API (no MainProductId on write).',
   };
 }
 
