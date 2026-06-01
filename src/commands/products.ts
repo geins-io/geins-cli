@@ -1,5 +1,7 @@
-import { mgmtRequest } from '../api/live-client.ts';
+import { mgmtRequest, mgmtUpload } from '../api/live-client.ts';
 import { ApiError, formatError } from '../api/errors.ts';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 export interface LocalizableContent {
   LanguageCode: string;
@@ -44,6 +46,49 @@ export interface Variant {
   Value?: string;
 }
 
+/** A product image (Product.Models.Read.Image). Lowest Order is the main image. */
+export interface ProductImage {
+  ProductId?: number;
+  Url?: string;
+  Order?: number;
+  Tags?: string[];
+}
+
+/** A product relation type (Product.Models.Read.RelationType), e.g. "Accessories". */
+export interface RelationType {
+  Id?: number;
+  Name?: string;
+  Order?: number;
+}
+
+/** A related-product link on a product (Product.Models.Read.RelatedProduct). */
+export interface RelatedProduct {
+  ProductId?: number;
+  RelatedProductId?: number;
+  RelationTypeId?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * A product parameter value as carried on a product (ProductParameter.Models.Read.ProductParameterValue):
+ * the assignment of a `Value` to a parameter, with the parameter/group resolved for display.
+ */
+export interface ProductParameterValue {
+  ParameterValueId?: number;
+  ProductId?: number;
+  ParameterId?: number;
+  ParameterName?: string;
+  GroupId?: number;
+  GroupName?: string;
+  /** Opaque type classification (1-7); the API does not document the meanings. */
+  ParameterType?: number;
+  Value?: string;
+  Description?: string;
+  LocalizedDescriptions?: LocalizableContent[];
+  InternalIdentifier?: string;
+  Order?: string;
+}
+
 /** A product as returned by the Management API (Product.Models.Read.Product). */
 export interface Product {
   ProductId: number;
@@ -57,8 +102,12 @@ export interface Product {
   SupplierId?: number;
   SupplierName?: string;
   MainCategoryId?: number;
+  PrimaryImage?: string | null;
   Items?: ProductItem[];
   Variants?: Variant[];
+  Images?: ProductImage[];
+  RelatedProducts?: RelatedProduct[];
+  ParameterValues?: ProductParameterValue[];
   DateCreated?: string;
   DateUpdated?: string;
   DateFirstAvailable?: string;
@@ -535,4 +584,490 @@ export function parseVariantCreateFlags(args: string[]): BuildVariantGroupInput 
   }
 
   return { name, collapseInLists, labels: labels.length > 0 ? labels : undefined, products, idType };
+}
+
+// ── Product images ─────────────────────────────────────────────────────────────
+
+/** The images of a product, fetched via `include=Images`. */
+export async function getProductImages(
+  id: string,
+  options?: { idType?: ProductIdType },
+): Promise<ProductImage[]> {
+  const product = await getProduct(id, { idType: options?.idType, include: 'Images' });
+  return product.Images ?? [];
+}
+
+/** The image file name from an image Url (the basename, sans query string). */
+export function imageNameFromUrl(url: string): string {
+  return (url.split('?')[0] ?? url).split('/').pop() ?? url;
+}
+
+/** Map a file name's extension to the Content-Type the API accepts, or null if unsupported. */
+export function imageContentType(name: string): string | null {
+  const ext = name.toLowerCase().split('.').pop();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'gif') return 'image/gif';
+  return null;
+}
+
+/**
+ * Load image bytes from a local file path or an http(s) URL, with a derived file name.
+ * Tolerates the forms terminals produce on drag-and-drop: surrounding quotes,
+ * backslash-escaped spaces, and file:// URLs.
+ */
+export async function loadImageSource(source: string): Promise<{ bytes: Uint8Array; name: string }> {
+  if (/^https?:\/\//i.test(source)) {
+    const res = await fetch(source);
+    if (!res.ok) throw new Error(`Failed to fetch image from URL (${res.status}): ${source}`);
+    return { bytes: new Uint8Array(await res.arrayBuffer()), name: imageNameFromUrl(source) };
+  }
+  let path = source.trim().replace(/^['"]|['"]$/g, '').replace(/\\ /g, ' ');
+  if (/^file:\/\//i.test(path)) {
+    path = decodeURIComponent(new URL(path).pathname);
+  }
+  const data = await readFile(path);
+  return { bytes: new Uint8Array(data), name: basename(path) };
+}
+
+interface UploadImageOptions {
+  idType?: ProductIdType;
+  primary?: boolean;
+  position?: number;
+  /** 'PUT' upserts (default); 'POST' adds. */
+  method?: 'PUT' | 'POST';
+}
+
+/** PUT/POST raw image bytes to /API/Product/{id}/Image/{imageName}. */
+export async function uploadProductImage(
+  id: string,
+  imageName: string,
+  bytes: Uint8Array,
+  contentType: string,
+  options?: UploadImageOptions,
+): Promise<{ FileName?: string }> {
+  const envelope = await mgmtUpload<Envelope<{ FileName?: string }>>(
+    `/API/Product/${encodeURIComponent(id)}/Image/${encodeURIComponent(imageName)}`,
+    bytes,
+    contentType,
+    {
+      method: options?.method ?? 'PUT',
+      query: {
+        productIdType: options?.idType,
+        isPrimaryImage: options?.primary,
+        position: options?.position,
+      },
+    },
+  );
+  return envelope.Resource ?? {};
+}
+
+/** Add an image to a product from a local file path or an http(s) URL. */
+export async function addProductImage(
+  id: string,
+  source: string,
+  options?: { idType?: ProductIdType; name?: string; primary?: boolean; position?: number },
+): Promise<{ FileName?: string; imageName: string }> {
+  const { bytes, name } = await loadImageSource(source);
+  const imageName = options?.name ?? name;
+  const contentType = imageContentType(imageName);
+  if (!contentType) {
+    throw new Error(`Unsupported image type for "${imageName}". Use .jpg, .png, or .gif.`);
+  }
+  const result = await uploadProductImage(id, imageName, bytes, contentType, {
+    idType: options?.idType,
+    primary: options?.primary,
+    position: options?.position,
+  });
+  return { ...result, imageName };
+}
+
+/** DELETE /API/Product/{id}/Image/{imageName}. */
+export async function deleteProductImage(
+  id: string,
+  imageName: string,
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await mgmtRequest(`/API/Product/${encodeURIComponent(id)}/Image/${encodeURIComponent(imageName)}`, {
+    method: 'DELETE',
+    query: { productIdType: options?.idType },
+  });
+}
+
+/**
+ * Re-upload an existing image (located by name) with new primary/position flags — the
+ * API has no dedicated reorder/set-primary endpoint, so we fetch the current bytes from
+ * its Url and PUT them back with the updated flags.
+ */
+async function reuploadExistingImage(
+  id: string,
+  imageName: string,
+  flags: { idType?: ProductIdType; primary?: boolean; position?: number },
+): Promise<void> {
+  const images = await getProductImages(id, { idType: flags.idType });
+  const match = images.find((img) => img.Url && imageNameFromUrl(img.Url) === imageName);
+  if (!match?.Url) {
+    throw new Error(`Image "${imageName}" not found on product ${id}.`);
+  }
+  const { bytes } = await loadImageSource(match.Url);
+  const contentType = imageContentType(imageName) ?? 'image/jpeg';
+  await uploadProductImage(id, imageName, bytes, contentType, {
+    idType: flags.idType,
+    primary: flags.primary,
+    position: flags.position,
+  });
+}
+
+/** Make an existing image the primary one (re-uploads with isPrimaryImage=true). */
+export async function setProductImagePrimary(
+  id: string,
+  imageName: string,
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await reuploadExistingImage(id, imageName, { idType: options?.idType, primary: true });
+}
+
+/** Change an existing image's position (re-uploads with the new position). */
+export async function reorderProductImage(
+  id: string,
+  imageName: string,
+  position: number,
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await reuploadExistingImage(id, imageName, { idType: options?.idType, position });
+}
+
+// ── Product relation types (account-wide registry) ─────────────────────────────
+
+/** GET /API/Product/RelationTypes — all relation types. */
+export async function listRelationTypes(): Promise<RelationType[]> {
+  const envelope = await mgmtRequest<Envelope<RelationType[]>>('/API/Product/RelationTypes');
+  return envelope.Resource ?? [];
+}
+
+/** GET /API/Product/RelationTypes/{id} — one relation type. */
+export async function getRelationType(id: number): Promise<RelationType> {
+  const envelope = await mgmtRequest<Envelope<RelationType>>(`/API/Product/RelationTypes/${id}`);
+  return envelope.Resource;
+}
+
+/** POST /API/Product/RelationTypes — create a relation type. */
+export async function createRelationType(input: { Name: string; Order?: number }): Promise<RelationType> {
+  const envelope = await mgmtRequest<Envelope<RelationType>>('/API/Product/RelationTypes', {
+    method: 'POST',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/** PUT /API/Product/RelationTypes/{id} — update a relation type. */
+export async function updateRelationType(id: number, input: { Name?: string; Order?: number }): Promise<RelationType> {
+  const envelope = await mgmtRequest<Envelope<RelationType>>(`/API/Product/RelationTypes/${id}`, {
+    method: 'PUT',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/** DELETE /API/Product/RelationTypes/{id} — delete a relation type. */
+export async function deleteRelationType(id: number): Promise<void> {
+  await mgmtRequest(`/API/Product/RelationTypes/${id}`, { method: 'DELETE' });
+}
+
+// ── Product relations (linking products) ───────────────────────────────────────
+
+/** The related products of a product, fetched via `include=RelatedProducts`. */
+export async function getProductRelations(
+  id: string,
+  options?: { idType?: ProductIdType },
+): Promise<RelatedProduct[]> {
+  const product = await getProduct(id, { idType: options?.idType, include: 'RelatedProducts' });
+  return product.RelatedProducts ?? [];
+}
+
+/** PUT /API/Product/{productId}/Related/{relationTypeId} — link related products. */
+export async function linkRelatedProducts(
+  productId: string,
+  relationTypeId: number,
+  relatedIds: string[],
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  const body = relatedIds.map((rid) => ({ RelatedProductId: rid, RelationTypeId: relationTypeId }));
+  await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Related/${relationTypeId}`, {
+    method: 'PUT',
+    body,
+    query: { productIdType: options?.idType },
+  });
+}
+
+/** PUT /API/Product/{productId}/UnlinkRelated/{relationTypeId} — unlink related products. */
+export async function unlinkRelatedProducts(
+  productId: string,
+  relationTypeId: number,
+  relatedIds: string[],
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  const body = relatedIds.map((rid) => ({ RelatedProductId: rid, RelationTypeId: relationTypeId }));
+  await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/UnlinkRelated/${relationTypeId}`, {
+    method: 'PUT',
+    body,
+    query: { productIdType: options?.idType },
+  });
+}
+
+// ── Product parameters ──────────────────────────────────────────────────────────
+//
+// Two layers (mirroring relation-types + relations):
+//   1. Definitions  — the account-wide registry of parameters, groups and predefined
+//      values under /API/ProductParameter. A "parameter" (e.g. "Material") belongs to a
+//      group and has a ParameterType (1-7, an opaque classification).
+//   2. Values        — a product's assignments under /API/Product/{id}/Parameter/{paramId}:
+//      a `Value` string (plus optional localized descriptions) for a given parameter.
+
+/** A product parameter definition (ProductParameter.Models.Read.ProductParameter). */
+export interface ProductParameter {
+  ParameterId?: number;
+  GroupId?: number;
+  GroupName?: string;
+  /** Opaque type classification (1-7); the API does not document the meanings. */
+  ParameterType?: number;
+  Name?: string;
+  LocalizedNames?: LocalizableContent[];
+  PredefinedValues?: ProductParameterPredefinedValue[];
+}
+
+/** A parameter group (ProductParameter.Models.Read.ProductParameterGroup) — organizes parameters. */
+export interface ProductParameterGroup {
+  GroupId?: number;
+  Name?: string;
+  Order?: number;
+  LocalizedNames?: LocalizableContent[];
+  ParameterIds?: number[];
+}
+
+/** A predefined value (ProductParameter.Models.Read.ProductParameterPredefinedValue) — a preset option for a parameter. */
+export interface ProductParameterPredefinedValue {
+  ParameterId?: number;
+  PredefinedValueId?: number;
+  Name?: string;
+  LocalizedNames?: LocalizableContent[];
+}
+
+// ── Per-product parameter values ────────────────────────────────────────────────
+
+/** The parameter values of a product, fetched via `include=ParameterValues`. */
+export async function getProductParameters(
+  id: string,
+  options?: { idType?: ProductIdType },
+): Promise<ProductParameterValue[]> {
+  const product = await getProduct(id, { idType: options?.idType, include: 'ParameterValues' });
+  return product.ParameterValues ?? [];
+}
+
+/** GET /API/Product/{productId}/Parameter/{parameterId} — one resolved parameter value. */
+export async function getProductParameterValue(
+  productId: string,
+  parameterId: number,
+  options?: { idType?: ProductIdType },
+): Promise<ProductParameterValue> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterValue>>(
+    `/API/Product/${encodeURIComponent(productId)}/Parameter/${parameterId}`,
+    { query: { productIdType: options?.idType } },
+  );
+  return envelope.Resource;
+}
+
+/** POST /API/Product/{productId}/Parameter/{parameterId} — assign/update a parameter value on a product. */
+export async function setProductParameterValue(
+  productId: string,
+  parameterId: number,
+  value: string,
+  options?: { idType?: ProductIdType; localizedDescriptions?: LocalizableContent[] },
+): Promise<ProductParameterValue> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterValue>>(
+    `/API/Product/${encodeURIComponent(productId)}/Parameter/${parameterId}`,
+    {
+      method: 'POST',
+      body: { Value: value, LocalizedDescriptions: options?.localizedDescriptions },
+      query: { productIdType: options?.idType },
+    },
+  );
+  return envelope.Resource;
+}
+
+/** DELETE /API/Product/{productId}/Parameter/{parameterId} — remove a parameter assignment from a product. */
+export async function removeProductParameterValue(
+  productId: string,
+  parameterId: number,
+  options?: { idType?: ProductIdType },
+): Promise<void> {
+  await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Parameter/${parameterId}`, {
+    method: 'DELETE',
+    query: { productIdType: options?.idType },
+  });
+}
+
+/** A parameter-value assignment used by the batch endpoints (ProductParameter.Models.Write.ProductParameterValue). */
+export interface ProductParameterValueWrite {
+  ProductId: number;
+  ParameterId: number;
+  Value: string;
+  LocalizedDescriptions?: LocalizableContent[];
+}
+
+/**
+ * PUT /API/Product/Parameter/Values — batch UPDATE (merge): values not supplied stay on
+ * the product. POST is a batch REPLACE — values not supplied are removed (see {@link replaceProductParameterValues}).
+ */
+export async function updateProductParameterValues(values: ProductParameterValueWrite[]): Promise<void> {
+  await mgmtRequest('/API/Product/Parameter/Values', {
+    method: 'PUT',
+    body: { productParameterValues: values },
+  });
+}
+
+/**
+ * POST /API/Product/Parameter/Values — batch REPLACE: any existing value not supplied in
+ * the request is removed from the product. Use {@link updateProductParameterValues} to merge instead.
+ */
+export async function replaceProductParameterValues(values: ProductParameterValueWrite[]): Promise<void> {
+  await mgmtRequest('/API/Product/Parameter/Values', {
+    method: 'POST',
+    body: { productParameterValues: values },
+  });
+}
+
+/** A single product/parameter pair for the batch-remove endpoint. */
+export interface ProductParameterAssignment {
+  ProductId: number;
+  ParameterId: number;
+}
+
+/** PATCH /API/Product/Parameter/Values/Remove — batch-remove parameter assignments from products. */
+export async function removeProductParameterAssignments(
+  assignments: ProductParameterAssignment[],
+): Promise<void> {
+  await mgmtRequest('/API/Product/Parameter/Values/Remove', {
+    method: 'PATCH',
+    body: { ProductParameterAssignments: assignments },
+  });
+}
+
+/** "Label=Value" summary of a product's parameter values, for compact display. */
+export function parameterValueSummary(v: ProductParameterValue): string {
+  const name = v.ParameterName ?? (v.ParameterId != null ? `#${v.ParameterId}` : '?');
+  return `${name}=${v.Value ?? ''}`;
+}
+
+// ── Parameter definitions (account-wide registry) ──────────────────────────────
+
+/** GET /API/ProductParameter/{id} — a parameter definition (incl. its predefined values). */
+export async function getProductParameterDef(id: number): Promise<ProductParameter> {
+  const envelope = await mgmtRequest<Envelope<ProductParameter>>(`/API/ProductParameter/${id}`);
+  return envelope.Resource;
+}
+
+export interface ProductParameterInput {
+  Name: string;
+  GroupId: number;
+  ParameterType: number;
+  /** Only sent on update; omit on create (the API assigns it). */
+  ParameterId?: number;
+  LocalizedNames?: LocalizableContent[];
+}
+
+/** POST /API/ProductParameter — create a parameter definition. */
+export async function createProductParameter(input: ProductParameterInput): Promise<ProductParameter> {
+  const envelope = await mgmtRequest<Envelope<ProductParameter>>('/API/ProductParameter', {
+    method: 'POST',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/** PUT /API/ProductParameter/{id} — update a parameter definition. */
+export async function updateProductParameter(
+  id: number,
+  input: Partial<ProductParameterInput>,
+): Promise<ProductParameter> {
+  const envelope = await mgmtRequest<Envelope<ProductParameter>>(`/API/ProductParameter/${id}`, {
+    method: 'PUT',
+    body: { ParameterId: id, ...input },
+  });
+  return envelope.Resource;
+}
+
+/** GET /API/ProductParameter/Group/{id} — a parameter group. */
+export async function getProductParameterGroup(id: number): Promise<ProductParameterGroup> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterGroup>>(`/API/ProductParameter/Group/${id}`);
+  return envelope.Resource;
+}
+
+export interface ProductParameterGroupInput {
+  Name: string;
+  Order?: number;
+  ParameterIds?: number[];
+  LocalizedNames?: LocalizableContent[];
+}
+
+/** POST /API/ProductParameter/Group — create a parameter group. */
+export async function createProductParameterGroup(
+  input: ProductParameterGroupInput,
+): Promise<ProductParameterGroup> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterGroup>>('/API/ProductParameter/Group', {
+    method: 'POST',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/** PUT /API/ProductParameter/Group/{id} — update a parameter group. */
+export async function updateProductParameterGroup(
+  id: number,
+  input: Partial<ProductParameterGroupInput>,
+): Promise<ProductParameterGroup> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterGroup>>(`/API/ProductParameter/Group/${id}`, {
+    method: 'PUT',
+    body: input,
+  });
+  return envelope.Resource;
+}
+
+/** GET /API/ProductParameter/PredefinedValue/{id} — a predefined value. */
+export async function getPredefinedValue(id: number): Promise<ProductParameterPredefinedValue> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterPredefinedValue>>(
+    `/API/ProductParameter/PredefinedValue/${id}`,
+  );
+  return envelope.Resource;
+}
+
+export interface PredefinedValueInput {
+  ParameterId: number;
+  Name: string;
+  PredefinedValueId?: number;
+  LocalizedNames?: LocalizableContent[];
+}
+
+/** POST /API/ProductParameter/PredefinedValue — create a predefined value for a parameter. */
+export async function createPredefinedValue(
+  input: PredefinedValueInput,
+): Promise<ProductParameterPredefinedValue> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterPredefinedValue>>(
+    '/API/ProductParameter/PredefinedValue',
+    { method: 'POST', body: input },
+  );
+  return envelope.Resource;
+}
+
+/** PUT /API/ProductParameter/PredefinedValue/{predefinedValueId} — rename a predefined value (name + localized names). */
+export async function updatePredefinedValueNames(
+  predefinedValueId: number,
+  name: string,
+  localizedNames?: LocalizableContent[],
+): Promise<ProductParameterPredefinedValue> {
+  const envelope = await mgmtRequest<Envelope<ProductParameterPredefinedValue>>(
+    `/API/ProductParameter/PredefinedValue/${predefinedValueId}`,
+    { method: 'PUT', body: { PredefinedValueId: predefinedValueId, Name: name, LocalizedNames: localizedNames } },
+  );
+  return envelope.Resource;
 }

@@ -6,6 +6,8 @@ interface ChatHistoryProps {
   welcomeComponent?: React.ReactNode;
   queuedComponents: React.ReactNode[];
   liveComponent?: React.ReactNode;
+  /** Bumped on terminal resize to remount <Static> and re-emit history at the new width. */
+  redrawKey?: number;
 }
 
 export function ChatHistory({
@@ -13,6 +15,7 @@ export function ChatHistory({
   welcomeComponent,
   queuedComponents,
   liveComponent,
+  redrawKey = 0,
 }: ChatHistoryProps) {
   const staticItems = ready && welcomeComponent
     ? [welcomeComponent, ...queuedComponents]
@@ -20,7 +23,7 @@ export function ChatHistory({
 
   return (
     <>
-      <Static items={staticItems}>
+      <Static key={redrawKey} items={staticItems}>
         {(component, index) => {
           const key =
             component &&

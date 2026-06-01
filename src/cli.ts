@@ -8,9 +8,10 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
+import { cliHelpSpec } from './help.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -40,6 +41,29 @@ const PRODUCT_HELP = [
   '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
   '  variants create [flags | JSON]            Create a variant group from existing products',
   '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
+  '  images <id> [--json]                      List a product\'s images',
+  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   Upload an image (jpg/png/gif)',
+  '  images delete <id> <imageName>            Remove an image',
+  '  images set-primary <id> <imageName>       Make an image the primary one',
+  '  images reorder <id> <imageName> <pos>     Change an image\'s position',
+  '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
+  '  relations <id> [--json]                   List a product\'s related products',
+  '  relations link <id> <relationTypeId> <relatedId...>     Link related products',
+  '  relations unlink <id> <relationTypeId> <relatedId...>   Unlink related products',
+  '  parameters <id> [--idtype <0-3>] [--json]   List a product\'s parameter values',
+  '  parameters get <id> <paramId>             Show one resolved parameter value',
+  '  parameters set <id> <paramId> <value> [--desc <code>:<text>]   Assign/update a value',
+  '  parameters remove <id> <paramId>          Remove a parameter assignment',
+  '  parameters batch <update|replace|remove> [--file|--body|stdin]   Batch value writes (JSON)',
+  '  parameters defs [get <id>|create --name <n> --group <id> --type <1-7>|update <id> ...]   Parameter definitions',
+  '  parameters groups [get <id>|create --name <n> [--order <n>] [--param <id>...]|update <id> ...]   Parameter groups',
+  '  parameters predefined [get <id>|add --param <pid> --name <n>|rename <id> <name>]   Predefined values',
+  '',
+  'parameters — a "parameter" (e.g. Material) is a definition that belongs to a group and',
+  '  has a type (1-7); a product gets a parameter VALUE by assigning a string to a parameterId.',
+  '  batch update = merge (keeps unlisted); batch replace = removes values not in the body.',
+  '  batch update/replace body: { "values": [ { "ProductId", "ParameterId", "Value", "LocalizedDescriptions"? } ] }',
+  '  batch remove body:         { "assignments": [ { "ProductId", "ParameterId" } ] }',
   '',
   'variants create — group existing products as variants of each other:',
   '  --name <name>                 Optional group name',
@@ -72,6 +96,14 @@ const PRODUCT_HELP = [
   '  geins product get 10001 --json',
   '  geins product items 10001',
   '  geins product variants 10001',
+  '  geins product images 10001',
+  '  geins product images add 10001 ./hero.jpg --primary',
+  '  geins product images add 10001 https://example.com/img.png --name img.png',
+  '  geins product relation-types add Accessories',
+  '  geins product relations link 10001 1 10002 10003',
+  '  geins product parameters 10001',
+  '  geins product parameters set 10001 42 "100% Cotton"',
+  '  geins product parameters defs create --name Material --group 3 --type 1',
   '  geins product variants labels add Color',
   '  geins product variants create --name Tee --label Color --product 1005:Color=Red --product 1010:Color=Blue',
   '  geins product list --brand 1 --in-stock',
@@ -119,7 +151,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   const app = render(React.createElement(App, { version: VERSION }), {
-    exitOnCtrlC: true,
+    exitOnCtrlC: false,
   });
 
   await app.waitUntilExit();
@@ -149,6 +181,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   if (outOverride) setOutputDir(outOverride);
 
   if (args[0] === '--help' || args[0] === 'help') {
+    // Machine-readable command tree for LLMs/automation.
+    if (args.includes('--json') || args.includes('--llm')) {
+      console.log(JSON.stringify(cliHelpSpec(VERSION), null, 2));
+      return;
+    }
     console.log(`geins v${VERSION}`);
     console.log('CLI for Geins Commerce Backend\n');
     console.log('Usage: geins <command> [args] [flags]');
@@ -159,7 +196,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  whoami    Show current user and account');
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
-    console.log('  product    Product commands (get, list, items, variants) — uses Management API');
+    console.log('  product    Product commands (get, list, items, variants, images, relations, parameters) — uses Management API');
     console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped\n');
@@ -170,6 +207,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  --help      Show help');
     console.log('  --version   Show version');
     console.log("\nRun 'geins product --help' for that command's options and examples.");
+    console.log("Run 'geins help --json' for the full command tree as JSON (for LLMs/automation).");
     return;
   }
 
@@ -641,6 +679,333 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               console.log(`Products: ${group.ProductIds.join(', ')}`);
               if (group.MainProductId) console.log(`Main product: ${group.MainProductId}`);
             }
+            break;
+          }
+          case 'images': {
+            const parseImgFlags = (args: string[]) => {
+              let idType: ProductIdType | undefined;
+              let primary = false;
+              let name: string | undefined;
+              let position: number | undefined;
+              for (let i = 0; i < args.length; i++) {
+                if (args[i] === '--idtype') { const n = Number(args[++i]); if (n >= 0 && n <= 3) idType = n as ProductIdType; }
+                else if (args[i] === '--primary') primary = true;
+                else if (args[i] === '--name') name = args[++i];
+                else if (args[i] === '--position') { const n = Number(args[++i]); if (!Number.isNaN(n)) position = n; }
+              }
+              return { idType, primary, name, position };
+            };
+            const action = subArgs[0]?.toLowerCase();
+
+            if (action === 'add') {
+              const id = subArgs[1];
+              const source = subArgs[2];
+              if (!id || !source) {
+                console.error("Usage: geins product images add <productId> <file|url> [--name <n>] [--primary] [--position <n>] [--idtype <0-3>]");
+                process.exit(1);
+              }
+              const f = parseImgFlags(subArgs.slice(3));
+              const r = await addProductImage(id, source, { idType: f.idType, name: f.name, primary: f.primary, position: f.position });
+              if (jsonMode) console.log(JSON.stringify(r, null, 2));
+              else console.log(`✓ Uploaded ${r.imageName}${f.primary ? ' (primary)' : ''} to product ${id}`);
+              break;
+            }
+            if (action === 'delete' || action === 'remove') {
+              const id = subArgs[1];
+              const name = subArgs[2];
+              if (!id || !name) { console.error('Usage: geins product images delete <productId> <imageName> [--idtype <0-3>]'); process.exit(1); }
+              const f = parseImgFlags(subArgs.slice(3));
+              await deleteProductImage(id, name, { idType: f.idType });
+              console.log(`✓ Deleted image ${name} from product ${id}`);
+              break;
+            }
+            if (action === 'set-primary') {
+              const id = subArgs[1];
+              const name = subArgs[2];
+              if (!id || !name) { console.error('Usage: geins product images set-primary <productId> <imageName> [--idtype <0-3>]'); process.exit(1); }
+              const f = parseImgFlags(subArgs.slice(3));
+              await setProductImagePrimary(id, name, { idType: f.idType });
+              console.log(`✓ Set ${name} as primary image for product ${id}`);
+              break;
+            }
+            if (action === 'reorder') {
+              const id = subArgs[1];
+              const name = subArgs[2];
+              const pos = Number(subArgs[3]);
+              if (!id || !name || Number.isNaN(pos)) { console.error('Usage: geins product images reorder <productId> <imageName> <position> [--idtype <0-3>]'); process.exit(1); }
+              const f = parseImgFlags(subArgs.slice(4));
+              await reorderProductImage(id, name, pos, { idType: f.idType });
+              console.log(`✓ Moved ${name} to position ${pos} for product ${id}`);
+              break;
+            }
+
+            // list (default): `images <id>` or `images list <id>`
+            const id = action === 'list' ? subArgs[1] : subArgs[0];
+            if (!id) { console.error('Usage: geins product images <productId> [--idtype <0-3>] [--json]'); process.exit(1); }
+            const f = parseImgFlags(action === 'list' ? subArgs.slice(2) : subArgs.slice(1));
+            const images = await getProductImages(id, { idType: f.idType });
+            if (jsonMode) { console.log(JSON.stringify(images, null, 2)); break; }
+            if (images.length === 0) { console.log('No images.'); break; }
+            const sorted = [...images].sort((a, b) => (a.Order ?? 0) - (b.Order ?? 0));
+            sorted.forEach((img, i) => {
+              const primary = i === 0 ? ' ★' : '';
+              console.log(`${img.Order ?? i}${primary}  ${imageNameFromUrl(img.Url ?? '')}  ${img.Url ?? ''}`);
+            });
+            console.log(`\n${images.length} image${images.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'relation-types': {
+            const action = subArgs[0]?.toLowerCase();
+            const orderOf = (args: string[]) => {
+              const i = args.indexOf('--order');
+              return i !== -1 && args[i + 1] != null ? Number(args[i + 1]) : undefined;
+            };
+            const nameOf = (args: string[]) => {
+              const i = args.indexOf('--name');
+              return i !== -1 ? args[i + 1] : undefined;
+            };
+
+            if (action === 'add' || action === 'create') {
+              const name = subArgs[1];
+              if (!name) { console.error('Usage: geins product relation-types add <name> [--order <n>]'); process.exit(1); }
+              const rt = await createRelationType({ Name: name, Order: orderOf(subArgs) });
+              console.log(`✓ Created relation type ${rt.Id}: ${rt.Name}`);
+              break;
+            }
+            if (action === 'get') {
+              const id = Number(subArgs[1]);
+              if (Number.isNaN(id)) { console.error('Usage: geins product relation-types get <id>'); process.exit(1); }
+              const rt = await getRelationType(id);
+              console.log(jsonMode ? JSON.stringify(rt, null, 2) : `${rt.Id}  ${rt.Name}  (order ${rt.Order ?? 0})`);
+              break;
+            }
+            if (action === 'update') {
+              const id = Number(subArgs[1]);
+              if (Number.isNaN(id)) { console.error('Usage: geins product relation-types update <id> [--name <n>] [--order <n>]'); process.exit(1); }
+              const rt = await updateRelationType(id, { Name: nameOf(subArgs), Order: orderOf(subArgs) });
+              console.log(`✓ Updated relation type ${rt.Id}: ${rt.Name}`);
+              break;
+            }
+            if (action === 'delete' || action === 'remove') {
+              const id = Number(subArgs[1]);
+              if (Number.isNaN(id)) { console.error('Usage: geins product relation-types delete <id>'); process.exit(1); }
+              await deleteRelationType(id);
+              console.log(`✓ Deleted relation type ${id}`);
+              break;
+            }
+            // list (default)
+            const types = await listRelationTypes();
+            if (jsonMode) { console.log(JSON.stringify(types, null, 2)); break; }
+            if (types.length === 0) { console.log('No relation types.'); break; }
+            for (const t of types) console.log(`${t.Id}  ${t.Name}  (order ${t.Order ?? 0})`);
+            console.log(`\n${types.length} relation type${types.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'relations': {
+            const action = subArgs[0]?.toLowerCase();
+            const idTypeOf = (args: string[]) => {
+              const i = args.indexOf('--idtype');
+              if (i !== -1 && args[i + 1] != null) { const n = Number(args[i + 1]); if (n >= 0 && n <= 3) return n as ProductIdType; }
+              return undefined;
+            };
+
+            if (action === 'link' || action === 'unlink') {
+              const productId = subArgs[1];
+              const relationTypeId = Number(subArgs[2]);
+              const relatedIds = subArgs.slice(3).filter((a) => !a.startsWith('--'));
+              if (!productId || Number.isNaN(relationTypeId) || relatedIds.length === 0) {
+                console.error(`Usage: geins product relations ${action} <productId> <relationTypeId> <relatedId...> [--idtype <0-3>]`);
+                process.exit(1);
+              }
+              const idType = idTypeOf(subArgs);
+              if (action === 'link') await linkRelatedProducts(productId, relationTypeId, relatedIds, { idType });
+              else await unlinkRelatedProducts(productId, relationTypeId, relatedIds, { idType });
+              console.log(`✓ ${action === 'link' ? 'Linked' : 'Unlinked'} ${relatedIds.join(', ')} ${action === 'link' ? 'to' : 'from'} product ${productId} (relation type ${relationTypeId})`);
+              break;
+            }
+
+            // view (default): relations <productId>
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins product relations <productId>  |  link/unlink <productId> <relationTypeId> <relatedId...>'); process.exit(1); }
+            const relations = await getProductRelations(id, { idType: idTypeOf(subArgs) });
+            if (jsonMode) { console.log(JSON.stringify(relations, null, 2)); break; }
+            if (relations.length === 0) { console.log('No related products.'); break; }
+            for (const r of relations) console.log(`${r.RelatedProductId}  (relation type ${r.RelationTypeId ?? '?'})`);
+            console.log(`\n${relations.length} related product${relations.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'parameters':
+          case 'params': {
+            const action = subArgs[0]?.toLowerCase();
+            const idTypeOf = (args: string[]) => {
+              const i = args.indexOf('--idtype');
+              if (i !== -1 && args[i + 1] != null) { const n = Number(args[i + 1]); if (n >= 0 && n <= 3) return n as ProductIdType; }
+              return undefined;
+            };
+            const flagVal = (args: string[], flag: string) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : undefined; };
+            const numFlag = (args: string[], flag: string) => { const v = flagVal(args, flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+            // Repeatable --param <id> (group membership) and --lang/--desc <code>:<text>.
+            const collect = (args: string[], flag: string) => args.flatMap((a, i) => (args[i - 1] === flag ? [a] : []));
+            const parseLocalized = (args: string[], flag: string): LocalizableContent[] | undefined => {
+              const parts = collect(args, flag);
+              if (parts.length === 0) return undefined;
+              return parts.map((p) => { const c = p.indexOf(':'); return { LanguageCode: c === -1 ? p : p.slice(0, c), Content: c === -1 ? '' : p.slice(c + 1) }; });
+            };
+
+            // ── Definitions registry ──
+            if (action === 'defs' || action === 'def') {
+              const sub2 = subArgs[1]?.toLowerCase();
+              if (sub2 === 'get') {
+                const pid = Number(subArgs[2]);
+                if (Number.isNaN(pid)) { console.error('Usage: geins product parameters defs get <parameterId>'); process.exit(1); }
+                const def = await getProductParameterDef(pid);
+                if (jsonMode) { console.log(JSON.stringify(def, null, 2)); break; }
+                console.log(`${def.ParameterId}  ${def.Name}  (type ${def.ParameterType ?? '?'}, group ${def.GroupName ?? def.GroupId ?? '?'})`);
+                for (const pv of def.PredefinedValues ?? []) console.log(`  · ${pv.PredefinedValueId}  ${pv.Name}`);
+                break;
+              }
+              if (sub2 === 'create' || sub2 === 'add') {
+                const name = flagVal(subArgs, '--name');
+                const group = numFlag(subArgs, '--group');
+                const type = numFlag(subArgs, '--type');
+                if (!name || group == null || type == null) { console.error('Usage: geins product parameters defs create --name <n> --group <groupId> --type <1-7> [--lang <code>:<text>]'); process.exit(1); }
+                const def = await createProductParameter({ Name: name, GroupId: group, ParameterType: type, LocalizedNames: parseLocalized(subArgs, '--lang') });
+                console.log(`✓ Created parameter ${def.ParameterId}: ${def.Name}`);
+                break;
+              }
+              if (sub2 === 'update') {
+                const pid = Number(subArgs[2]);
+                if (Number.isNaN(pid)) { console.error('Usage: geins product parameters defs update <parameterId> [--name <n>] [--group <id>] [--type <1-7>]'); process.exit(1); }
+                const def = await updateProductParameter(pid, { Name: flagVal(subArgs, '--name'), GroupId: numFlag(subArgs, '--group'), ParameterType: numFlag(subArgs, '--type'), LocalizedNames: parseLocalized(subArgs, '--lang') });
+                console.log(`✓ Updated parameter ${def.ParameterId}: ${def.Name}`);
+                break;
+              }
+              console.error('Usage: geins product parameters defs [get <id> | create --name <n> --group <id> --type <1-7> | update <id> ...]');
+              process.exit(1);
+            }
+
+            // ── Parameter groups ──
+            if (action === 'groups' || action === 'group') {
+              const sub2 = subArgs[1]?.toLowerCase();
+              if (sub2 === 'get') {
+                const gid = Number(subArgs[2]);
+                if (Number.isNaN(gid)) { console.error('Usage: geins product parameters groups get <groupId>'); process.exit(1); }
+                const g = await getProductParameterGroup(gid);
+                if (jsonMode) { console.log(JSON.stringify(g, null, 2)); break; }
+                console.log(`${g.GroupId}  ${g.Name}  (order ${g.Order ?? 0})`);
+                if (g.ParameterIds?.length) console.log(`  parameters: ${g.ParameterIds.join(', ')}`);
+                break;
+              }
+              if (sub2 === 'create' || sub2 === 'add') {
+                const name = flagVal(subArgs, '--name');
+                if (!name) { console.error('Usage: geins product parameters groups create --name <n> [--order <n>] [--param <id>...]'); process.exit(1); }
+                const paramIds = collect(subArgs, '--param').map(Number).filter((n) => !Number.isNaN(n));
+                const g = await createProductParameterGroup({ Name: name, Order: numFlag(subArgs, '--order'), ParameterIds: paramIds.length ? paramIds : undefined, LocalizedNames: parseLocalized(subArgs, '--lang') });
+                console.log(`✓ Created parameter group ${g.GroupId}: ${g.Name}`);
+                break;
+              }
+              if (sub2 === 'update') {
+                const gid = Number(subArgs[2]);
+                if (Number.isNaN(gid)) { console.error('Usage: geins product parameters groups update <groupId> [--name <n>] [--order <n>] [--param <id>...]'); process.exit(1); }
+                const paramIds = collect(subArgs, '--param').map(Number).filter((n) => !Number.isNaN(n));
+                const g = await updateProductParameterGroup(gid, { Name: flagVal(subArgs, '--name'), Order: numFlag(subArgs, '--order'), ParameterIds: paramIds.length ? paramIds : undefined, LocalizedNames: parseLocalized(subArgs, '--lang') });
+                console.log(`✓ Updated parameter group ${g.GroupId}: ${g.Name}`);
+                break;
+              }
+              console.error('Usage: geins product parameters groups [get <id> | create --name <n> [--order <n>] [--param <id>...] | update <id> ...]');
+              process.exit(1);
+            }
+
+            // ── Predefined values ──
+            if (action === 'predefined' || action === 'predef') {
+              const sub2 = subArgs[1]?.toLowerCase();
+              if (sub2 === 'get') {
+                const vid = Number(subArgs[2]);
+                if (Number.isNaN(vid)) { console.error('Usage: geins product parameters predefined get <predefinedValueId>'); process.exit(1); }
+                const pv = await getPredefinedValue(vid);
+                console.log(jsonMode ? JSON.stringify(pv, null, 2) : `${pv.PredefinedValueId}  ${pv.Name}  (parameter ${pv.ParameterId ?? '?'})`);
+                break;
+              }
+              if (sub2 === 'add' || sub2 === 'create') {
+                const param = numFlag(subArgs, '--param');
+                const name = flagVal(subArgs, '--name');
+                if (param == null || !name) { console.error('Usage: geins product parameters predefined add --param <parameterId> --name <n> [--lang <code>:<text>]'); process.exit(1); }
+                const pv = await createPredefinedValue({ ParameterId: param, Name: name, LocalizedNames: parseLocalized(subArgs, '--lang') });
+                console.log(`✓ Created predefined value ${pv.PredefinedValueId}: ${pv.Name}`);
+                break;
+              }
+              if (sub2 === 'rename' || sub2 === 'update') {
+                const vid = Number(subArgs[2]);
+                const name = subArgs[3] ?? flagVal(subArgs, '--name');
+                if (Number.isNaN(vid) || !name) { console.error('Usage: geins product parameters predefined rename <predefinedValueId> <name>'); process.exit(1); }
+                const pv = await updatePredefinedValueNames(vid, name, parseLocalized(subArgs, '--lang'));
+                console.log(`✓ Renamed predefined value ${pv.PredefinedValueId} to ${pv.Name}`);
+                break;
+              }
+              console.error('Usage: geins product parameters predefined [get <id> | add --param <pid> --name <n> | rename <id> <name>]');
+              process.exit(1);
+            }
+
+            // ── Batch value writes (JSON body) ──
+            if (action === 'batch') {
+              const op = subArgs[1]?.toLowerCase();
+              if (op !== 'update' && op !== 'replace' && op !== 'remove') {
+                console.error("Usage: geins product parameters batch <update|replace|remove> [--file <path> | --body '<json>' | stdin]\n" +
+                  '  update/replace body: { "values": [ { "ProductId", "ParameterId", "Value", "LocalizedDescriptions"? } ] }\n' +
+                  '  remove body:         { "assignments": [ { "ProductId", "ParameterId" } ] }');
+                process.exit(1);
+              }
+              const body = (await resolveBody(subArgs.slice(2))) as Record<string, unknown>;
+              if (op === 'remove') {
+                const assignments = (body.assignments ?? body.ProductParameterAssignments ?? []) as ProductParameterAssignment[];
+                await removeProductParameterAssignments(assignments);
+                console.log(`✓ Removed ${assignments.length} parameter assignment${assignments.length === 1 ? '' : 's'}`);
+              } else {
+                const values = (body.values ?? body.productParameterValues ?? []) as ProductParameterValueWrite[];
+                if (op === 'update') await updateProductParameterValues(values);
+                else await replaceProductParameterValues(values);
+                console.log(`✓ ${op === 'update' ? 'Updated' : 'Replaced'} ${values.length} parameter value${values.length === 1 ? '' : 's'}`);
+              }
+              break;
+            }
+
+            // ── Per-product values ──
+            if (action === 'set') {
+              const id = subArgs[1];
+              const paramId = Number(subArgs[2]);
+              const value = subArgs[3];
+              if (!id || Number.isNaN(paramId) || value == null) { console.error('Usage: geins product parameters set <productId> <parameterId> <value> [--desc <code>:<text>] [--idtype <0-3>]'); process.exit(1); }
+              const v = await setProductParameterValue(id, paramId, value, { idType: idTypeOf(subArgs), localizedDescriptions: parseLocalized(subArgs, '--desc') });
+              if (jsonMode) { console.log(JSON.stringify(v, null, 2)); break; }
+              console.log(`✓ Set ${v.ParameterName ?? paramId}=${v.Value ?? value} on product ${id}`);
+              break;
+            }
+            if (action === 'remove' || action === 'delete') {
+              const id = subArgs[1];
+              const paramId = Number(subArgs[2]);
+              if (!id || Number.isNaN(paramId)) { console.error('Usage: geins product parameters remove <productId> <parameterId> [--idtype <0-3>]'); process.exit(1); }
+              await removeProductParameterValue(id, paramId, { idType: idTypeOf(subArgs) });
+              console.log(`✓ Removed parameter ${paramId} from product ${id}`);
+              break;
+            }
+            if (action === 'get') {
+              const id = subArgs[1];
+              const paramId = Number(subArgs[2]);
+              if (!id || Number.isNaN(paramId)) { console.error('Usage: geins product parameters get <productId> <parameterId> [--idtype <0-3>] [--json]'); process.exit(1); }
+              const v = await getProductParameterValue(id, paramId, { idType: idTypeOf(subArgs) });
+              if (jsonMode) { console.log(JSON.stringify(v, null, 2)); break; }
+              console.log(`${parameterValueSummary(v)}  (parameter ${v.ParameterId}, type ${v.ParameterType ?? '?'}, group ${v.GroupName ?? v.GroupId ?? '?'})`);
+              break;
+            }
+
+            // list (default): parameters <productId> or parameters list <productId>
+            const id = action === 'list' ? subArgs[1] : subArgs[0];
+            if (!id) { console.error('Usage: geins product parameters <productId>  |  set/remove/get <productId> <parameterId> ...  |  defs|groups|predefined|batch ...'); process.exit(1); }
+            const values = await getProductParameters(id, { idType: idTypeOf(subArgs) });
+            if (jsonMode) { console.log(JSON.stringify(values, null, 2)); break; }
+            if (values.length === 0) { console.log('No parameter values.'); break; }
+            for (const v of values) console.log(`${v.ParameterId}  ${parameterValueSummary(v)}${v.GroupName ? `  [${v.GroupName}]` : ''}`);
+            console.log(`\n${values.length} parameter value${values.length === 1 ? '' : 's'}`);
             break;
           }
           case 'list':

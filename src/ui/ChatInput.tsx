@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { Box, Text, useInput, useWindowSize } from 'ink';
+import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 
 const COMMANDS: Record<string, string> = {
@@ -24,7 +24,7 @@ const COMMANDS: Record<string, string> = {
 const SUBCOMMANDS: Record<string, string[]> = {
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
-  product: ['get', 'list', 'query', 'items', 'variants', 'help'],
+  product: ['get', 'list', 'query', 'items', 'variants', 'images', 'relation-types', 'relations', 'parameters', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
@@ -52,6 +52,10 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     query: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
     items: '<productId>',
     variants: '<productId> | create | labels [add|remove|rename]',
+    images: '<productId> | add <id> <file|url> | delete | set-primary | reorder',
+    'relation-types': '[list | get <id> | add <name> | update <id> | delete <id>]',
+    relations: '<productId> | link <id> <typeId> <relatedId...> | unlink ...',
+    parameters: '<productId> | get <id> <paramId> | set <id> <paramId> <value> | remove | batch | defs | groups | predefined',
   },
   api: {
     GET: '<path>',
@@ -78,6 +82,10 @@ const BARE_HINTS: Record<string, string> = {
 
 const COMMAND_NAMES = Object.keys(COMMANDS);
 
+// Matches an absolute image path as terminals insert it on drag-and-drop (with
+// backslash-escaped spaces, optional file:// scheme). Used to show a compact chip.
+const DROPPED_IMAGE_RE = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s])*\.(?:png|jpe?g|gif|webp|bmp|heic|svg)/gi;
+
 interface ChatInputProps {
   disabled?: boolean;
   copilotActive?: boolean;
@@ -88,23 +96,46 @@ interface ChatInputProps {
 }
 
 export function ChatInput({ disabled = false, copilotActive = false, copilotProvider, onSubmit, onCancel, onToggleCopilot }: ChatInputProps) {
+  const { exit } = useApp();
   const [value, setValue] = useState('');
   const [menuIndex, setMenuIndex] = useState(0);
   const [showMenu, setShowMenu] = useState(false);
+  // While toggling through commands with Tab, keep the FULL command list visible
+  // (instead of the prefix-filtered subset) so the user sees what they're cycling.
+  const [cycleAll, setCycleAll] = useState(false);
   const [inputKey, setInputKey] = useState(0);
   const historyRef = useRef<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  // Dropped-file chips: placeholder text shown in the input → real path used on submit.
+  const attachmentsRef = useRef<Map<string, string>>(new Map());
+  const attachCounter = useRef(0);
+  const prevValueRef = useRef('');
+
+  // Commands offerable right now (`/new` only makes sense once a copilot is active).
+  const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new');
 
   const getMatches = (input: string): string[] => {
     const query = input.startsWith('/') ? input.slice(1) : input;
-    const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new');
     if (!query && input === '/') return available;
     return available.filter(c => c.startsWith(query.toLowerCase()));
   };
 
-  const matches = showMenu ? getMatches(value) : [];
+  const matches = showMenu ? (cycleAll ? available : getMatches(value)) : [];
 
   useInput((input, key) => {
+    // Ctrl-C clears the current input; if it's already empty, exit.
+    if (key.ctrl && input === 'c') {
+      if (value) {
+        setValue('');
+        setShowMenu(false);
+        setCycleAll(false);
+        setHistoryIndex(-1);
+        setInputKey(k => k + 1);
+      } else {
+        exit();
+      }
+      return;
+    }
     if (disabled) {
       if (key.escape && onCancel) onCancel();
       return;
@@ -135,18 +166,82 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
       onToggleCopilot();
       return;
     }
-    if (key.tab && showMenu && matches.length > 0) {
-      const selected = matches[menuIndex]!;
-      setValue(`/${selected} `);
-      setShowMenu(false);
-      setInputKey(k => k + 1);
+    if (key.tab && value.startsWith('/')) {
+      const tokens = value.slice(1).split(/\s+/);
+      // ── Command level: no space yet (still typing the command name) ──
+      if (!value.includes(' ')) {
+        const typed = tokens[0]!.toLowerCase();
+        const exactIdx = available.indexOf(typed);
+        if (exactIdx !== -1) {
+          // A complete command is typed → toggle to the next available command.
+          const nextIdx = (exactIdx + 1) % available.length;
+          setValue(`/${available[nextIdx]!}`);
+          setCycleAll(true);
+          setShowMenu(true);
+          setMenuIndex(nextIdx);
+          setInputKey(k => k + 1);
+          return;
+        }
+        // A partial command → autocomplete to the highlighted (or first) match.
+        const ms = getMatches(value);
+        if (ms.length > 0) {
+          setValue(`/${ms[menuIndex] ?? ms[0]!}`);
+          setCycleAll(false);
+          setShowMenu(true);
+          setMenuIndex(0);
+          setInputKey(k => k + 1);
+          return;
+        }
+        return;
+      }
+      // ── Subcommand level: "/cmd " or "/cmd <partial>" (not deeper than one arg) ──
+      const cmd = tokens[0]!.toLowerCase();
+      const subs = SUBCOMMANDS[cmd];
+      if (subs && tokens.length <= 2) {
+        const typedSub = (tokens[1] ?? '').toLowerCase();
+        const exactSub = subs.findIndex(s => s.toLowerCase() === typedSub);
+        if (exactSub !== -1) {
+          // Complete subcommand → toggle to the next one.
+          const next = subs[(exactSub + 1) % subs.length]!;
+          setValue(`/${cmd} ${next}`);
+          setInputKey(k => k + 1);
+          return;
+        }
+        // Partial (or empty) subcommand → autocomplete to the first match.
+        const matchSub = typedSub
+          ? subs.filter(s => s.toLowerCase().startsWith(typedSub))
+          : subs;
+        if (matchSub.length > 0) {
+          setValue(`/${cmd} ${matchSub[0]!}`);
+          setInputKey(k => k + 1);
+          return;
+        }
+      }
+      return;
     }
   });
 
-  const handleChange = (newValue: string) => {
-    setValue(newValue);
-    if (newValue.startsWith('/') && !newValue.includes(' ')) {
-      const m = getMatches(newValue);
+  const handleChange = (raw: string) => {
+    // Single-line field: collapse newlines/tabs (e.g. from a multiline paste) to spaces
+    // so the layout and the prompt icon don't break.
+    let next = raw.replace(/[\r\n\t]+/g, ' ');
+    // A drag-drop/paste inserts many chars at once; only then collapse image paths into
+    // a chip (and guard the regex behind a cheap check so big pastes don't stall).
+    const jumped = next.length - prevValueRef.current.length > 1;
+    if (jumped && next.includes('/') && /\.(?:png|jpe?g|gif|webp|bmp|heic|svg)/i.test(next)) {
+      next = next.replace(DROPPED_IMAGE_RE, (match) => {
+        const realPath = match.replace(/^['"]|['"]$/g, '').replace(/\\ /g, ' ');
+        const placeholder = `[image #${++attachCounter.current}]`;
+        attachmentsRef.current.set(placeholder, realPath);
+        return placeholder;
+      });
+    }
+    prevValueRef.current = next;
+    setValue(next);
+    setCycleAll(false); // typing resumes prefix-filtered matches
+    if (next !== raw) setInputKey(k => k + 1); // remount so the field shows the cleaned value/chip
+    if (next.startsWith('/') && !next.includes(' ')) {
+      const m = getMatches(next);
       setShowMenu(m.length > 0);
       setMenuIndex(0);
     } else {
@@ -155,15 +250,23 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
   };
 
   const handleSubmit = (input: string) => {
-    const submitted = showMenu && matches.length > 0 ? `/${matches[menuIndex]!}` : input;
+    let submitted = showMenu && matches.length > 0 ? `/${matches[menuIndex]!}` : input;
+    // Expand chips back to the real path (quoted so spaces survive tokenization).
+    for (const [placeholder, realPath] of attachmentsRef.current) {
+      if (submitted.includes(placeholder)) submitted = submitted.split(placeholder).join(`"${realPath}"`);
+    }
+    attachmentsRef.current.clear();
+    attachCounter.current = 0;
     if (submitted.trim()) {
       historyRef.current.push(submitted.trim());
     }
     onSubmit(submitted);
     setValue('');
+    prevValueRef.current = '';
     setHistoryIndex(-1);
     setShowMenu(false);
     setMenuIndex(0);
+    setCycleAll(false);
   };
 
   const { columns } = useWindowSize();

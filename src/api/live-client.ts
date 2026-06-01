@@ -93,6 +93,56 @@ export async function mgmtRequest<T = unknown>(
   return data;
 }
 
+export interface MgmtUploadOptions {
+  method?: string;
+  query?: Record<string, string | number | boolean | undefined>;
+}
+
+/**
+ * Upload raw binary to the Management API (e.g. a product image). Unlike mgmtRequest,
+ * the body is sent as-is with the given Content-Type instead of JSON.
+ */
+export async function mgmtUpload<T = unknown>(
+  path: string,
+  body: Uint8Array,
+  contentType: string,
+  options?: MgmtUploadOptions,
+  creds?: ApiCredentials,
+): Promise<T> {
+  const credentials = creds ?? (await getCredentials());
+  const apiPath = path.startsWith('/') ? path : `/${path}`;
+  const url = new URL(`${getMgmtApiUrl()}${apiPath}`);
+  if (options?.query) {
+    for (const [k, v] of Object.entries(options.query)) {
+      if (v !== undefined) url.searchParams.set(k, String(v));
+    }
+  }
+
+  const basic = Buffer.from(`${credentials.username}:${credentials.managementApiPassword}`).toString('base64');
+  const method = options?.method ?? 'PUT';
+  const res = await fetch(url.toString(), {
+    method,
+    headers: {
+      'Authorization': `Basic ${basic}`,
+      'X-ApiKey': credentials.managementApiKey,
+      'Content-Type': contentType,
+      'Accept': 'application/json',
+    },
+    body,
+  });
+
+  if (!res.ok) {
+    const err = await ApiError.fromResponse(res, method, apiPath);
+    await recordResponse({ method, path: apiPath, status: res.status, error: err.body || err.message });
+    throw err;
+  }
+
+  const text = await res.text();
+  const data = (text ? JSON.parse(text) : undefined) as T;
+  await recordResponse({ method, path: apiPath, status: res.status, data });
+  return data;
+}
+
 interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;

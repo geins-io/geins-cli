@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo } from 'react';
-import { Box, Text, useApp } from 'ink';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import { ChatHistory } from './ChatHistory.tsx';
 import { ChatInput } from './ChatInput.tsx';
@@ -50,14 +50,80 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, type BuildVariantGroupResult } from '../commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
 
+/**
+ * Split a slash-command line into tokens, honoring double/single quotes and backslash
+ * escapes (and stripping them). This makes drag-and-dropped file paths — which terminals
+ * insert with escaped spaces or quotes — arrive as a single argument.
+ */
+function tokenizeCommandLine(line: string): string[] {
+  const tokens: string[] = [];
+  let cur = '';
+  let started = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"' && i + 1 < line.length) cur += line[++i]!;
+      else cur += ch;
+    } else if (ch === '\\' && i + 1 < line.length) {
+      cur += line[++i]!;
+      started = true;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) { tokens.push(cur); cur = ''; started = false; }
+    } else {
+      cur += ch;
+      started = true;
+    }
+  }
+  if (started) tokens.push(cur);
+  return tokens;
+}
+
 export function App({ version = VERSION }: { version?: string }) {
   const { exit } = useApp();
+  const { stdout, write } = useStdout();
   const appState = useAppState();
+
+  // Redraw on terminal resize. Ink reflows the live frame itself, but the chat
+  // history lives in <Static> — already committed to scrollback at the old width.
+  // When the terminal re-wraps that text it looks broken and Ink never repaints it.
+  // So on resize we clear the screen + scrollback (via Ink's integrated writer, so
+  // its frame bookkeeping stays correct) and bump `redrawKey`, which remounts the
+  // <Static> region and re-emits the whole history cleanly at the new width.
+  const [redrawKey, setRedrawKey] = useState(0);
+  useEffect(() => {
+    if (!stdout) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onResize = () => {
+      // Terminals fire a burst of resize events while a drag is in progress;
+      // debounce so we only redraw once it settles.
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        write('\u001b[2J\u001b[3J\u001b[H'); // clear screen + scrollback, home cursor
+        setRedrawKey(k => k + 1);
+      }, 100);
+    };
+    stdout.on('resize', onResize);
+    return () => {
+      if (timer) clearTimeout(timer);
+      stdout.off('resize', onResize);
+    };
+  }, [stdout, write]);
+
+  // While a modal is open the input box is hidden (it handles Ctrl-C itself), so
+  // catch Ctrl-C here to let the user still quit out of a modal flow.
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') exit();
+  }, { isActive: appState.activeMode !== null });
 
   const logText = useCallback((text: string) => {
     appState.addToChat(
@@ -378,11 +444,11 @@ export function App({ version = VERSION }: { version?: string }) {
     }
 
     const line = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
-    const parts = line.match(/(?:[^\s"]+|"[^"]*")/g) ?? [];
+    const parts = tokenizeCommandLine(line);
     if (parts.length === 0) return;
 
     const command = parts[0]!.toLowerCase();
-    const args = parts.slice(1).map(a => a.replace(/^"|"$/g, ''));
+    const args = parts.slice(1);
 
     logDim(`  > ${trimmed}`);
 
@@ -883,6 +949,274 @@ export function App({ version = VERSION }: { version?: string }) {
               }
               break;
             }
+            case 'images': {
+              const imgArgs = args.slice(1);
+              const parseImgFlags = (a: string[]) => {
+                let idType: 0 | 1 | 2 | 3 | undefined;
+                let primary = false;
+                let name: string | undefined;
+                let position: number | undefined;
+                for (let i = 0; i < a.length; i++) {
+                  if (a[i] === '--idtype') { const n = Number(a[++i]); if (n >= 0 && n <= 3) idType = n as 0 | 1 | 2 | 3; }
+                  else if (a[i] === '--primary') primary = true;
+                  else if (a[i] === '--name') name = a[++i];
+                  else if (a[i] === '--position') { const n = Number(a[++i]); if (!Number.isNaN(n)) position = n; }
+                }
+                return { idType, primary, name, position };
+              };
+              const imgAction = imgArgs[0]?.toLowerCase();
+              const spin = (label: string) => appState.setLiveComponent(
+                <Box key="product-spinner" gap={1} paddingX={1}><Spinner type="dots" /><Text dimColor>{label}</Text></Box>,
+              );
+
+              if (imgAction === 'add') {
+                const id = imgArgs[1]; const source = imgArgs[2];
+                if (!id || !source) { logError('  Usage: /product images add <productId> <file|url> [--name <n>] [--primary] [--position <n>]'); break; }
+                const f = parseImgFlags(imgArgs.slice(3));
+                spin(`Uploading image to ${id}...`);
+                const r = await addProductImage(id, source, { idType: f.idType, name: f.name, primary: f.primary, position: f.position });
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Uploaded ${r.imageName}${f.primary ? ' (primary)' : ''} to product ${id}`);
+                break;
+              }
+              if (imgAction === 'delete' || imgAction === 'remove') {
+                const id = imgArgs[1]; const name = imgArgs[2];
+                if (!id || !name) { logError('  Usage: /product images delete <productId> <imageName>'); break; }
+                const f = parseImgFlags(imgArgs.slice(3));
+                spin(`Deleting ${name}...`);
+                await deleteProductImage(id, name, { idType: f.idType });
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Deleted image ${name} from product ${id}`);
+                break;
+              }
+              if (imgAction === 'set-primary') {
+                const id = imgArgs[1]; const name = imgArgs[2];
+                if (!id || !name) { logError('  Usage: /product images set-primary <productId> <imageName>'); break; }
+                const f = parseImgFlags(imgArgs.slice(3));
+                spin(`Setting ${name} as primary...`);
+                await setProductImagePrimary(id, name, { idType: f.idType });
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Set ${name} as primary image for product ${id}`);
+                break;
+              }
+              if (imgAction === 'reorder') {
+                const id = imgArgs[1]; const name = imgArgs[2]; const pos = Number(imgArgs[3]);
+                if (!id || !name || Number.isNaN(pos)) { logError('  Usage: /product images reorder <productId> <imageName> <position>'); break; }
+                const f = parseImgFlags(imgArgs.slice(4));
+                spin(`Reordering ${name}...`);
+                await reorderProductImage(id, name, pos, { idType: f.idType });
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Moved ${name} to position ${pos} for product ${id}`);
+                break;
+              }
+
+              // list (default)
+              const id = imgAction === 'list' ? imgArgs[1] : imgArgs[0];
+              if (!id) { logError('  Usage: /product images <productId>'); break; }
+              const f = parseImgFlags(imgAction === 'list' ? imgArgs.slice(2) : imgArgs.slice(1));
+              spin(`Fetching images of ${id}...`);
+              const images = await getProductImages(id, { idType: f.idType });
+              appState.setLiveComponent(null);
+              if (images.length === 0) { logDim('  No images.'); break; }
+              const sorted = [...images].sort((a, b) => (a.Order ?? 0) - (b.Order ?? 0));
+              sorted.forEach((img, i) => {
+                const primary = i === 0 ? ' ★' : '';
+                logText(`  ${img.Order ?? i}${primary}  ${imageNameFromUrl(img.Url ?? '')}`);
+              });
+              logDim(`  ${images.length} image${images.length === 1 ? '' : 's'}`);
+              break;
+            }
+            case 'relation-types': {
+              const rtArgs = args.slice(1);
+              const rtAction = rtArgs[0]?.toLowerCase();
+              const orderOf = () => { const i = rtArgs.indexOf('--order'); return i !== -1 && rtArgs[i + 1] != null ? Number(rtArgs[i + 1]) : undefined; };
+              const nameOf = () => { const i = rtArgs.indexOf('--name'); return i !== -1 ? rtArgs[i + 1] : undefined; };
+              if (rtAction === 'add' || rtAction === 'create') {
+                const name = rtArgs[1];
+                if (!name) { logError('  Usage: /product relation-types add <name> [--order <n>]'); break; }
+                const rt = await createRelationType({ Name: name, Order: orderOf() });
+                logSuccess(`  ✓ Created relation type ${rt.Id}: ${rt.Name}`);
+                break;
+              }
+              if (rtAction === 'update') {
+                const id = Number(rtArgs[1]);
+                if (Number.isNaN(id)) { logError('  Usage: /product relation-types update <id> [--name <n>] [--order <n>]'); break; }
+                const rt = await updateRelationType(id, { Name: nameOf(), Order: orderOf() });
+                logSuccess(`  ✓ Updated relation type ${rt.Id}: ${rt.Name}`);
+                break;
+              }
+              if (rtAction === 'delete' || rtAction === 'remove') {
+                const id = Number(rtArgs[1]);
+                if (Number.isNaN(id)) { logError('  Usage: /product relation-types delete <id>'); break; }
+                await deleteRelationType(id);
+                logSuccess(`  ✓ Deleted relation type ${id}`);
+                break;
+              }
+              if (rtAction === 'get') {
+                const id = Number(rtArgs[1]);
+                if (Number.isNaN(id)) { logError('  Usage: /product relation-types get <id>'); break; }
+                const rt = await getRelationType(id);
+                logText(`  ${rt.Id}  ${rt.Name}  (order ${rt.Order ?? 0})`);
+                break;
+              }
+              const types = await listRelationTypes();
+              if (types.length === 0) { logDim('  No relation types.'); break; }
+              for (const t of types) logText(`  ${t.Id}  ${t.Name}  (order ${t.Order ?? 0})`);
+              logDim(`  ${types.length} relation type${types.length === 1 ? '' : 's'}`);
+              break;
+            }
+            case 'relations': {
+              const relArgs = args.slice(1);
+              const relAction = relArgs[0]?.toLowerCase();
+              const idTypeOf = () => { const i = relArgs.indexOf('--idtype'); if (i !== -1 && relArgs[i + 1] != null) { const n = Number(relArgs[i + 1]); if (n >= 0 && n <= 3) return n as 0 | 1 | 2 | 3; } return undefined; };
+              if (relAction === 'link' || relAction === 'unlink') {
+                const productId = relArgs[1]; const relationTypeId = Number(relArgs[2]);
+                const relatedIds = relArgs.slice(3).filter((a) => !a.startsWith('--'));
+                if (!productId || Number.isNaN(relationTypeId) || relatedIds.length === 0) {
+                  logError(`  Usage: /product relations ${relAction} <productId> <relationTypeId> <relatedId...>`); break;
+                }
+                if (relAction === 'link') await linkRelatedProducts(productId, relationTypeId, relatedIds, { idType: idTypeOf() });
+                else await unlinkRelatedProducts(productId, relationTypeId, relatedIds, { idType: idTypeOf() });
+                logSuccess(`  ✓ ${relAction === 'link' ? 'Linked' : 'Unlinked'} ${relatedIds.join(', ')} ${relAction === 'link' ? 'to' : 'from'} product ${productId} (relation type ${relationTypeId})`);
+                break;
+              }
+              const id = relArgs[0];
+              if (!id) { logError('  Usage: /product relations <productId> | link/unlink <id> <relationTypeId> <relatedId...>'); break; }
+              const relations = await getProductRelations(id, { idType: idTypeOf() });
+              if (relations.length === 0) { logDim('  No related products.'); break; }
+              for (const r of relations) logText(`  ${r.RelatedProductId}  (relation type ${r.RelationTypeId ?? '?'})`);
+              logDim(`  ${relations.length} related product${relations.length === 1 ? '' : 's'}`);
+              break;
+            }
+            case 'parameters':
+            case 'params': {
+              const pArgs = args.slice(1);
+              const pAction = pArgs[0]?.toLowerCase();
+              const idTypeOf = () => { const i = pArgs.indexOf('--idtype'); if (i !== -1 && pArgs[i + 1] != null) { const n = Number(pArgs[i + 1]); if (n >= 0 && n <= 3) return n as 0 | 1 | 2 | 3; } return undefined; };
+              const flagVal = (flag: string) => { const i = pArgs.indexOf(flag); return i !== -1 ? pArgs[i + 1] : undefined; };
+              const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+              const collect = (flag: string) => pArgs.flatMap((a, i) => (pArgs[i - 1] === flag ? [a] : []));
+              const parseLocalized = (flag: string): LocalizableContent[] | undefined => {
+                const parts = collect(flag);
+                if (parts.length === 0) return undefined;
+                return parts.map((p) => { const c = p.indexOf(':'); return { LanguageCode: c === -1 ? p : p.slice(0, c), Content: c === -1 ? '' : p.slice(c + 1) }; });
+              };
+
+              if (pAction === 'defs' || pAction === 'def') {
+                const sub2 = pArgs[1]?.toLowerCase();
+                if (sub2 === 'get') {
+                  const pid = Number(pArgs[2]);
+                  if (Number.isNaN(pid)) { logError('  Usage: /product parameters defs get <parameterId>'); break; }
+                  const def = await getProductParameterDef(pid);
+                  logText(`  ${def.ParameterId}  ${def.Name}  (type ${def.ParameterType ?? '?'}, group ${def.GroupName ?? def.GroupId ?? '?'})`);
+                  for (const pv of def.PredefinedValues ?? []) logDim(`    · ${pv.PredefinedValueId}  ${pv.Name}`);
+                  break;
+                }
+                if (sub2 === 'create' || sub2 === 'add') {
+                  const name = flagVal('--name'); const group = numFlag('--group'); const type = numFlag('--type');
+                  if (!name || group == null || type == null) { logError('  Usage: /product parameters defs create --name <n> --group <groupId> --type <1-7>'); break; }
+                  const def = await createProductParameter({ Name: name, GroupId: group, ParameterType: type, LocalizedNames: parseLocalized('--lang') });
+                  logSuccess(`  ✓ Created parameter ${def.ParameterId}: ${def.Name}`);
+                  break;
+                }
+                if (sub2 === 'update') {
+                  const pid = Number(pArgs[2]);
+                  if (Number.isNaN(pid)) { logError('  Usage: /product parameters defs update <parameterId> [--name <n>] [--group <id>] [--type <1-7>]'); break; }
+                  const def = await updateProductParameter(pid, { Name: flagVal('--name'), GroupId: numFlag('--group'), ParameterType: numFlag('--type'), LocalizedNames: parseLocalized('--lang') });
+                  logSuccess(`  ✓ Updated parameter ${def.ParameterId}: ${def.Name}`);
+                  break;
+                }
+                logError('  Usage: /product parameters defs [get <id> | create --name <n> --group <id> --type <1-7> | update <id> ...]');
+                break;
+              }
+
+              if (pAction === 'groups' || pAction === 'group') {
+                const sub2 = pArgs[1]?.toLowerCase();
+                if (sub2 === 'get') {
+                  const gid = Number(pArgs[2]);
+                  if (Number.isNaN(gid)) { logError('  Usage: /product parameters groups get <groupId>'); break; }
+                  const g = await getProductParameterGroup(gid);
+                  logText(`  ${g.GroupId}  ${g.Name}  (order ${g.Order ?? 0})`);
+                  if (g.ParameterIds?.length) logDim(`    parameters: ${g.ParameterIds.join(', ')}`);
+                  break;
+                }
+                if (sub2 === 'create' || sub2 === 'add') {
+                  const name = flagVal('--name');
+                  if (!name) { logError('  Usage: /product parameters groups create --name <n> [--order <n>] [--param <id>...]'); break; }
+                  const paramIds = collect('--param').map(Number).filter((n) => !Number.isNaN(n));
+                  const g = await createProductParameterGroup({ Name: name, Order: numFlag('--order'), ParameterIds: paramIds.length ? paramIds : undefined, LocalizedNames: parseLocalized('--lang') });
+                  logSuccess(`  ✓ Created parameter group ${g.GroupId}: ${g.Name}`);
+                  break;
+                }
+                if (sub2 === 'update') {
+                  const gid = Number(pArgs[2]);
+                  if (Number.isNaN(gid)) { logError('  Usage: /product parameters groups update <groupId> [--name <n>] [--order <n>] [--param <id>...]'); break; }
+                  const paramIds = collect('--param').map(Number).filter((n) => !Number.isNaN(n));
+                  const g = await updateProductParameterGroup(gid, { Name: flagVal('--name'), Order: numFlag('--order'), ParameterIds: paramIds.length ? paramIds : undefined, LocalizedNames: parseLocalized('--lang') });
+                  logSuccess(`  ✓ Updated parameter group ${g.GroupId}: ${g.Name}`);
+                  break;
+                }
+                logError('  Usage: /product parameters groups [get <id> | create --name <n> [--order <n>] [--param <id>...] | update <id> ...]');
+                break;
+              }
+
+              if (pAction === 'predefined' || pAction === 'predef') {
+                const sub2 = pArgs[1]?.toLowerCase();
+                if (sub2 === 'get') {
+                  const vid = Number(pArgs[2]);
+                  if (Number.isNaN(vid)) { logError('  Usage: /product parameters predefined get <predefinedValueId>'); break; }
+                  const pv = await getPredefinedValue(vid);
+                  logText(`  ${pv.PredefinedValueId}  ${pv.Name}  (parameter ${pv.ParameterId ?? '?'})`);
+                  break;
+                }
+                if (sub2 === 'add' || sub2 === 'create') {
+                  const param = numFlag('--param'); const name = flagVal('--name');
+                  if (param == null || !name) { logError('  Usage: /product parameters predefined add --param <parameterId> --name <n>'); break; }
+                  const pv = await createPredefinedValue({ ParameterId: param, Name: name, LocalizedNames: parseLocalized('--lang') });
+                  logSuccess(`  ✓ Created predefined value ${pv.PredefinedValueId}: ${pv.Name}`);
+                  break;
+                }
+                if (sub2 === 'rename' || sub2 === 'update') {
+                  const vid = Number(pArgs[2]); const name = pArgs[3] ?? flagVal('--name');
+                  if (Number.isNaN(vid) || !name) { logError('  Usage: /product parameters predefined rename <predefinedValueId> <name>'); break; }
+                  const pv = await updatePredefinedValueNames(vid, name, parseLocalized('--lang'));
+                  logSuccess(`  ✓ Renamed predefined value ${pv.PredefinedValueId} to ${pv.Name}`);
+                  break;
+                }
+                logError('  Usage: /product parameters predefined [get <id> | add --param <pid> --name <n> | rename <id> <name>]');
+                break;
+              }
+
+              if (pAction === 'set') {
+                const id = pArgs[1]; const paramId = Number(pArgs[2]); const value = pArgs[3];
+                if (!id || Number.isNaN(paramId) || value == null) { logError('  Usage: /product parameters set <productId> <parameterId> <value> [--desc <code>:<text>]'); break; }
+                const v = await setProductParameterValue(id, paramId, value, { idType: idTypeOf(), localizedDescriptions: parseLocalized('--desc') });
+                logSuccess(`  ✓ Set ${v.ParameterName ?? paramId}=${v.Value ?? value} on product ${id}`);
+                break;
+              }
+              if (pAction === 'remove' || pAction === 'delete') {
+                const id = pArgs[1]; const paramId = Number(pArgs[2]);
+                if (!id || Number.isNaN(paramId)) { logError('  Usage: /product parameters remove <productId> <parameterId>'); break; }
+                await removeProductParameterValue(id, paramId, { idType: idTypeOf() });
+                logSuccess(`  ✓ Removed parameter ${paramId} from product ${id}`);
+                break;
+              }
+              if (pAction === 'get') {
+                const id = pArgs[1]; const paramId = Number(pArgs[2]);
+                if (!id || Number.isNaN(paramId)) { logError('  Usage: /product parameters get <productId> <parameterId>'); break; }
+                const v = await getProductParameterValue(id, paramId, { idType: idTypeOf() });
+                logText(`  ${parameterValueSummary(v)}  (parameter ${v.ParameterId}, type ${v.ParameterType ?? '?'}, group ${v.GroupName ?? v.GroupId ?? '?'})`);
+                break;
+              }
+
+              const id = pAction === 'list' ? pArgs[1] : pArgs[0];
+              if (!id) { logError('  Usage: /product parameters <productId> | set/remove/get <id> <paramId> ... | defs|groups|predefined ...'); break; }
+              const values = await getProductParameters(id, { idType: idTypeOf() });
+              if (values.length === 0) { logDim('  No parameter values.'); break; }
+              for (const v of values) logText(`  ${v.ParameterId}  ${parameterValueSummary(v)}${v.GroupName ? `  [${v.GroupName}]` : ''}`);
+              logDim(`  ${values.length} parameter value${values.length === 1 ? '' : 's'}`);
+              break;
+            }
             case 'help':
               logText('');
               logText('  /product get <id>        Show product details');
@@ -892,6 +1226,10 @@ export function App({ version = VERSION }: { version?: string }) {
               logText('  /product variants <id>   Show the product\'s variant group (sibling products)');
               logText('  /product variants create        Build a group from existing products (interactive)');
               logText('  /product variants labels        Manage variant dimension labels (list/add/remove/rename)');
+              logText('  /product images <id>     List images; add <id> <file|url> [--primary] | delete | set-primary | reorder');
+              logText('  /product relation-types  Manage relation types (list/get/add/update/delete)');
+              logText('  /product relations <id>  List relations; link/unlink <id> <relationTypeId> <relatedId...>');
+              logText('  /product parameters <id> List values; set/remove/get <id> <paramId>; defs|groups|predefined ...');
               logText('');
               break;
             default:
@@ -1162,6 +1500,7 @@ export function App({ version = VERSION }: { version?: string }) {
   return (
     <Box flexDirection="column">
       <ChatHistory
+        redrawKey={redrawKey}
         ready={appState.ready}
         welcomeComponent={welcomeComponent}
         queuedComponents={appState.chatComponents}
