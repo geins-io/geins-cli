@@ -12,7 +12,6 @@ const COMMANDS: Record<string, string> = {
   workflow: 'Workflow commands',
   product: 'Product commands',
   copilot: 'Toggle AI copilot mode',
-  provider: 'Switch copilot provider',
   new: 'New conversation',
   api: 'Raw API request',
   management: 'Management API',
@@ -29,7 +28,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
-  copilot: ['set'],
+  copilot: ['provider', 'set'],
 };
 
 const ARG_HINTS: Record<string, Record<string, string>> = {
@@ -73,6 +72,7 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     DELETE: '/API/...',
   },
   copilot: {
+    provider: 'claude | codex | gemini | ollama | lmstudio',
     set: 'claude | codex | gemini | ollama | lmstudio',
   },
 };

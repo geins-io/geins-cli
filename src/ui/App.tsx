@@ -93,10 +93,10 @@ export function App({ version = VERSION }: { version?: string }) {
   const { exit } = useApp();
   const appState = useAppState();
 
-  // Terminal resize is handled by Ink natively — it re-wraps and redraws the live frame,
-  // and the terminal keeps the chat-history scrollback. We deliberately do NOT clear the
-  // screen/scrollback on resize: doing so wiped history, because Ink's <Static> can't be made
-  // to reliably re-emit on a forced remount (render throttling drops the re-emit).
+  // Terminal resize: the whole UI (history + input) is one inline Ink frame (ChatHistory no
+  // longer uses <Static>), so Ink repaints it cleanly at the new width. We do NOT clear the
+  // screen ourselves — that's what corrupted the display before. See ChatHistory for the
+  // viewport cap that keeps the inline frame from exceeding the window (which Ink mishandles).
 
   // While a modal is open the input box is hidden (it handles Ctrl-C itself), so
   // catch Ctrl-C here to let the user still quit out of a modal flow.
@@ -473,7 +473,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /api        Raw API request         /api GET /products');
           logText('  /management Management API           /management GET /API/Market/List');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
-          logText('  /copilot    Toggle AI copilot mode  /copilot set');
+          logText('  /copilot    Toggle AI copilot mode  /copilot provider');
           if (appState.copilotActive) {
             logText('  /new        New conversation         Clear copilot history');
           }
@@ -1489,14 +1489,9 @@ export function App({ version = VERSION }: { version?: string }) {
           break;
         }
 
-        case 'provider': {
-          appState.setActiveMode('select-copilot');
-          break;
-        }
-
         case 'copilot': {
           const sub = args[0]?.toLowerCase();
-          if (sub === 'set') {
+          if (sub === 'set' || sub === 'provider') {
             appState.setActiveMode('select-copilot');
             break;
           }
