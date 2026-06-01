@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { loadSession } from '../../auth/session.ts';
 import { loadConfig, saveConfig } from '../../config/store.ts';
-import { startSession, endSession } from '../../memory/index.ts';
+import { startSession, endSession, setMemoryAccount } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
 export type ActiveMode = 'login' | 'select-account' | 'select-copilot' | null;
@@ -53,8 +53,10 @@ export function useAppState() {
           user: session.user.email,
           account: session.accountKey,
         }));
+        setMemoryAccount(session.accountKey);
         startSession(session.accountKey);
       } else {
+        setMemoryAccount();
         startSession();
       }
       if (config.theme) {

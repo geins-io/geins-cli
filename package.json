@@ -9,11 +9,13 @@
   "scripts": {
     "dev": "bun run src/bin.ts",
     "dev:web": "bun run src/web.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "generate:api-ref": "bun run scripts/generate-api-ref.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/react": "^19.2.14"
+    "@types/react": "^19.2.14",
+    "yaml": "^2.9.0"
   },
   "peerDependencies": {
     "typescript": "^5"

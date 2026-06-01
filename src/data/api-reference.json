@@ -1,0 +1,2457 @@
+{
+  "Brand": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Brand/{id}",
+        "summary": "Get brand",
+        "responseSchema": "Brand.Models.Read.Brand"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Brand/{id}",
+        "summary": "Update brand",
+        "requestSchema": "Brand.Models.Write.Brand",
+        "responseSchema": "Brand.Models.Read.Brand"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Brand/{id}",
+        "summary": "Delete brand",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Brand/Query",
+        "summary": "Query brands",
+        "requestSchema": "Brand.Models.BrandQuery"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Brand",
+        "summary": "Create brand",
+        "requestSchema": "Brand.Models.Write.Brand",
+        "responseSchema": "Brand.Models.Read.Brand"
+      }
+    ],
+    "schemas": {
+      "Brand.Models.Read.Brand": {
+        "fields": {
+          "BrandId": "integer(int32)",
+          "Name": "string",
+          "ExternalId": "string",
+          "Descriptions": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "Brand.Models.Write.Brand": {
+        "fields": {
+          "Name": "string",
+          "ExternalId": "string",
+          "Descriptions": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "Brand.Models.BrandQuery": {
+        "fields": {
+          "CreatedAfter": "string(date-time)",
+          "BrandIds": "array",
+          "ExternalIds": "array"
+        }
+      }
+    }
+  },
+  "Campaign": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Campaign/List",
+        "summary": "Lists all campaigns.",
+        "responseSchema": "CampaignListItem"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Campaign/Types",
+        "summary": "Gets all campaign types.",
+        "responseSchema": "CampaignTypeItem"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Campaign/{id}",
+        "summary": "Gets a campaign by ID.",
+        "responseSchema": "CampaignDetailItem"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Campaign/{id}",
+        "summary": "Updates a campaign.",
+        "requestSchema": "CampaignDetailItemBase",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Campaign/{id}",
+        "summary": "Deletes a campaign.",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Campaign",
+        "summary": "Creates a new campaign.",
+        "requestSchema": "CampaignDetailItemBase",
+        "responseSchema": "CampaignDetailItem"
+      }
+    ],
+    "schemas": {
+      "CampaignListItem": {
+        "fields": {
+          "CampaignId": "string(uuid)",
+          "Type": "string",
+          "CampaignBaseType": "string",
+          "Market": "string",
+          "StartDate": "string(date-time)",
+          "CreateDate": "string(date-time)",
+          "Status": "string",
+          "Title": "string",
+          "PromoCode": "string",
+          "Description": "string",
+          "Priority": "integer(int32)"
+        }
+      },
+      "CampaignTypeItem": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string"
+        }
+      },
+      "CampaignDetailItem": {
+        "fields": {
+          "CampaignNumber": "integer(int32)",
+          "Status": "string",
+          "RoundingMethod": "string",
+          "ContractVersion": "string",
+          "CampaignId": "string(uuid)",
+          "CampaignBaseType": "0|1|2|3",
+          "Title": "LocalizedItem[]",
+          "Description": "string",
+          "MarketId": "string",
+          "CampaignTypeId": "integer(int32)",
+          "BuyQuantity": "integer(int32)",
+          "Amounts": "object",
+          "PayForQuantity": "integer(int32)",
+          "Priority": "integer(int32)",
+          "StopCombining": "boolean",
+          "ValidFrom": "string(date-time)",
+          "ValidTo": "string(date-time)",
+          "PromoCode": "string",
+          "HideTitle": "boolean",
+          "CantCombineWithCartCampaign": "boolean",
+          "PercentageValue": "number(double)",
+          "ExcludeProductsOnSale": "boolean",
+          "SaleTypesToEnforce": "0|1|2|3",
+          "MinimumPurchaseAmounts": "object",
+          "MinimumQuantity": "integer(int32)",
+          "CheckMinAmountAfterDiscounts": "boolean",
+          "Scoped": "boolean",
+          "OncePerCustomer": "boolean",
+          "UseSalePrice": "boolean",
+          "FreeShipping": "boolean",
+          "UsageLimit": "integer(int32)",
+          "Prices": "object",
+          "LandingPage": "CampaignLandingPage",
+          "SelectedUsers": "array",
+          "SelectedGroups": "array",
+          "Enabled": "boolean",
+          "ProductSelection": "ProductSelection",
+          "Group": "string",
+          "PriceOutput": "0|1"
+        }
+      },
+      "CampaignDetailItemBase": {
+        "fields": {
+          "CampaignId": "string(uuid)",
+          "CampaignBaseType": "0|1|2|3",
+          "Title": "LocalizedItem[]",
+          "Description": "string",
+          "MarketId": "string",
+          "CampaignTypeId": "integer(int32)",
+          "BuyQuantity": "integer(int32)",
+          "Amounts": "object",
+          "PayForQuantity": "integer(int32)",
+          "Priority": "integer(int32)",
+          "StopCombining": "boolean",
+          "ValidFrom": "string(date-time)",
+          "ValidTo": "string(date-time)",
+          "PromoCode": "string",
+          "HideTitle": "boolean",
+          "CantCombineWithCartCampaign": "boolean",
+          "PercentageValue": "number(double)",
+          "ExcludeProductsOnSale": "boolean",
+          "SaleTypesToEnforce": "0|1|2|3",
+          "MinimumPurchaseAmounts": "object",
+          "MinimumQuantity": "integer(int32)",
+          "CheckMinAmountAfterDiscounts": "boolean",
+          "Scoped": "boolean",
+          "OncePerCustomer": "boolean",
+          "UseSalePrice": "boolean",
+          "FreeShipping": "boolean",
+          "UsageLimit": "integer(int32)",
+          "Prices": "object",
+          "LandingPage": "CampaignLandingPage",
+          "SelectedUsers": "array",
+          "SelectedGroups": "array",
+          "Enabled": "boolean",
+          "ProductSelection": "ProductSelection",
+          "Group": "string",
+          "PriceOutput": "0|1"
+        }
+      }
+    }
+  },
+  "Category": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Category/{id}",
+        "summary": "Get category",
+        "responseSchema": "Category.Models.Read.Category"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Category/{id}",
+        "summary": "Update category",
+        "requestSchema": "Category.Models.Write.Category",
+        "responseSchema": "Category.Models.Read.Category"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Category/Query",
+        "summary": "Query categories",
+        "requestSchema": "Category.Models.CategoryQuery"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Category",
+        "summary": "Create category",
+        "requestSchema": "Category.Models.Write.Category",
+        "responseSchema": "Category.Models.Read.Category"
+      }
+    ],
+    "schemas": {
+      "Category.Models.Read.Category": {
+        "fields": {
+          "CategoryId": "integer(int32)",
+          "ParentCategoryId": "integer(int32)",
+          "Names": "Shared.Models.LocalizableContent[]",
+          "Descriptions": "Shared.Models.LocalizableContent[]",
+          "SecondaryDescriptions": "Shared.Models.LocalizableContent[]",
+          "Meta": "Category.Models.CategoryMeta",
+          "GoogleCategoryPath": "string",
+          "Hidden": "boolean",
+          "Active": "boolean"
+        }
+      },
+      "Category.Models.Write.Category": {
+        "fields": {
+          "ParentCategoryId": "integer(int32)",
+          "Names": "Shared.Models.LocalizableContent[]",
+          "Descriptions": "Shared.Models.LocalizableContent[]",
+          "SecondaryDescriptions": "Shared.Models.LocalizableContent[]",
+          "Meta": "Category.Models.CategoryMeta",
+          "Hidden": "boolean",
+          "Active": "boolean"
+        }
+      },
+      "Category.Models.CategoryQuery": {
+        "fields": {
+          "CreatedAfter": "string(date-time)",
+          "CategoryIds": "array"
+        }
+      }
+    }
+  },
+  "CustomerGroup": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/CustomerGroup/List",
+        "summary": "List customer groups",
+        "responseSchema": "CustomerGroup.Models.Read.CustomerGroup"
+      },
+      {
+        "method": "GET",
+        "path": "/API/CustomerGroup/{id}",
+        "summary": "Get customer group",
+        "responseSchema": "CustomerGroup.Models.Read.CustomerGroup"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/CustomerGroup/{id}",
+        "summary": "Update customer group",
+        "requestSchema": "CustomerGroup.Models.Write.CustomerGroup",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/CustomerGroup/{id}",
+        "summary": "Delete customer group",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/CustomerGroup",
+        "summary": "Create customer group",
+        "requestSchema": "CustomerGroup.Models.Write.CustomerGroup",
+        "responseSchema": "Envelope-Int"
+      }
+    ],
+    "schemas": {
+      "CustomerGroup.Models.Read.CustomerGroup": {
+        "fields": {
+          "CustomerGroupId": "integer(int32)",
+          "Name": "string",
+          "DiscountPercentage": "integer(int32)"
+        }
+      },
+      "CustomerGroup.Models.Write.CustomerGroup": {
+        "fields": {
+          "Name": "string",
+          "DiscountPercentage": "integer(int32)"
+        }
+      }
+    }
+  },
+  "Market": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Market/List",
+        "summary": "List markets"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Market/{marketId}",
+        "summary": "Get market",
+        "responseSchema": "Market.Models.Market"
+      }
+    ],
+    "schemas": {
+      "Market.Models.Market": {
+        "fields": {
+          "Id": "integer(int32)",
+          "ChannelId": "string",
+          "Name": "string",
+          "DisplayName": "string",
+          "Url": "string",
+          "Currency": "string",
+          "VatRate": "number(double)",
+          "MarketPrefix": "string",
+          "CountryId": "integer(int32)",
+          "CurrencyId": "integer(int32)",
+          "CurrencyRate": "number(double)",
+          "LanguageId": "integer(int32)",
+          "Language": "string",
+          "Languages": "Market.Models.LanguageItem[]",
+          "Countries": "Market.Models.CountryItem[]",
+          "Currencies": "Market.Models.CurrencyItem[]"
+        }
+      }
+    }
+  },
+  "Order": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Order/Count/{email}",
+        "summary": "Count orders"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/Query",
+        "summary": "Query orders",
+        "requestSchema": "Order.Models.OrderQuery"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/Query/{page}",
+        "summary": "Query orders (Paged)",
+        "requestSchema": "Order.Models.OrderQuery",
+        "responseSchema": "Order.Models.Order"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/Id",
+        "summary": "Create order id",
+        "responseSchema": "Envelope-Int"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/PublicId/{publicId}",
+        "summary": "Create or reserve public order id",
+        "responseSchema": "Order.Models.OrderIdData"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order",
+        "summary": "Create order",
+        "requestSchema": "Order.Models.Order",
+        "responseSchema": "Envelope-Int"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Order/{id}/{include}",
+        "summary": "Get order (id)",
+        "responseSchema": "Order.Models.Order"
+      },
+      {
+        "method": "GET",
+        "path": "/API/OrderByPublicId/{publicId}/{include}",
+        "summary": "Get order (public id)",
+        "responseSchema": "Order.Models.Order"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Order/{id}",
+        "summary": "Delete order"
+      },
+      {
+        "method": "PATCH",
+        "path": "/API/Order/{id}",
+        "summary": "Partial update of an order",
+        "requestSchema": "Order.Models.OrderUpdate"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Order/{orderId}/OrderRow/{orderRowId}",
+        "summary": "Cancel order row",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Order/Statuses",
+        "summary": "Get order statuses"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{id}/Status/{status}/{transactionId}/{secondaryTransactionId}",
+        "summary": "Update order status",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/PaymentDetail/{paymentDetailId}/SetAsPaid",
+        "summary": "Set payment as paid",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Order/Capture/{captureId}",
+        "summary": "Get capture",
+        "responseSchema": "Order.Capture"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/Capture/SetAsProcessed",
+        "summary": "Set capture as processed",
+        "requestSchema": "Order.ProcessedCapture",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/ValidateCreation",
+        "summary": "Validate order",
+        "requestSchema": "Order.ValidateOrderCreationRequest",
+        "responseSchema": "API.Order.OrderCreationValidationStatus"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{id}/Comment",
+        "summary": "Add order comment",
+        "requestSchema": "API.Order.OrderComment",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{id}/TransactionData",
+        "summary": "Update transaction data",
+        "requestSchema": "API.Order.TransactionData",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {
+      "Order.Models.OrderQuery": {
+        "fields": {
+          "Updated": "string(date-time)",
+          "UpdatedAfter": "string(date-time)",
+          "UpdatedBefore": "string(date-time)",
+          "CreatedBefore": "string(date-time)",
+          "CreatedAfter": "string(date-time)",
+          "CompletedBefore": "string(date-time)",
+          "CompletedAfter": "string(date-time)",
+          "StatusList": "string",
+          "MarketId": "integer(int32)",
+          "PaymentName": "string",
+          "ParcelGroupId": "integer(int32)",
+          "CustomerId": "integer(int32)",
+          "Email": "string",
+          "Include": "string",
+          "ExternalOrderStatus": "integer(int32)",
+          "CombineProductContainerRows": "boolean",
+          "PackingLocationId": "integer(int32)",
+          "GroupOrderRows": "boolean",
+          "BatchId": "string(uuid)"
+        }
+      },
+      "Order.Models.Order": {
+        "fields": {
+          "Id": "integer(int32)",
+          "ChannelId": "string",
+          "ExternalId": "string",
+          "PersonalId": "string",
+          "CustomerId": "integer(int32)",
+          "CustomerTypeId": "integer(int32)",
+          "CustomerGroupId": "integer(int32)",
+          "CustomerGroupName": "string",
+          "CustomerLoggedIn": "boolean",
+          "CreatedAt": "string(date-time)",
+          "UpdatedAt": "string(date-time)",
+          "CompletedAt": "string(date-time)",
+          "Status": "string",
+          "Currency": "string",
+          "CurrencyRate": "number(double)",
+          "MarketId": "integer(int32)",
+          "MarketName": "string",
+          "Language": "string",
+          "OrderTotal": "number(double)",
+          "ExpectedSum": "number(double)",
+          "VATTotal": "number(double)",
+          "OrderValueIncVat": "number(double)",
+          "OrderValueExVat": "number(double)",
+          "ItemValueIncVat": "number(double)",
+          "ItemValueExVat": "number(double)",
+          "Discount": "number(double)",
+          "DiscountExVat": "number(double)",
+          "FromBalance": "number(double)",
+          "ShippingFee": "number(double)",
+          "ShippingFeeExVat": "number(double)",
+          "PaymentFee": "number(double)",
+          "PaymentFeeExVat": "number(double)",
+          "Message": "string",
+          "OrderMessages": "array",
+          "PaymentDetails": "Order.Models.PaymentDetail[]",
+          "ShippingDetails": "Order.Models.ShippingDetail[]",
+          "ShippingAddress": "Order.Models.Address",
+          "BillingAddress": "Order.Models.Address",
+          "Rows": "Order.Models.OrderRow[]",
+          "Refunds": "Order.Models.OrderRefund[]",
+          "Ip": "string",
+          "UserAgent": "string",
+          "ServiceLocation": "string",
+          "CampaignCode": "string",
+          "CampaignCodeId": "integer(int32)",
+          "Percent": "integer(int32)",
+          "DesiredDeliveryDate": "string(date-time)",
+          "Gender": "boolean",
+          "CartId": "integer(int32)",
+          "SessionId": "string",
+          "ExternalOrderStatus": "0|10|20|30|40",
+          "CampaignIds": "array",
+          "CampaignNames": "array",
+          "MetaData": "object",
+          "PublicId": "string(uuid)"
+        }
+      },
+      "Order.Models.OrderIdData": {
+        "fields": {
+          "OrderId": "integer(int32)",
+          "PublicId": "string(uuid)"
+        }
+      },
+      "Order.Models.OrderUpdate": {
+        "fields": {
+          "ExternalId": "string",
+          "ParcelNumber": "string",
+          "ExternalOrderStatus": "0|10|20|30|40",
+          "ReturnParcelNumber": "string"
+        }
+      },
+      "Order.Capture": {
+        "fields": {
+          "CaptureId": "string(uuid)",
+          "OrderPaymentId": "string(uuid)",
+          "OrderId": "integer(int32)",
+          "ExternalOrderId": "string",
+          "ExternalId": "string",
+          "Reference": "string",
+          "Description": "string",
+          "ProcessedOn": "string(date-time)",
+          "CapturedItemTotal": "number(double)",
+          "CapturedShippingFee": "number(double)",
+          "CapturedPaymentFee": "number(double)",
+          "CapturedDiscount": "number(double)",
+          "CapturedBalance": "number(double)",
+          "VatRate": "number(double)",
+          "TrackingNumber": "string",
+          "ShippingName": "string",
+          "TrackingUri": "string",
+          "ShippingMethod": "string",
+          "PaymentName": "string",
+          "Locale": "string",
+          "Rows": "Order.CaptureRow[]",
+          "OrderTransactionId": "string",
+          "SecondaryOrderTransactionId": "string"
+        }
+      },
+      "Order.ProcessedCapture": {
+        "fields": {
+          "CaptureId": "string(uuid)",
+          "ExternalId": "string",
+          "Reference": "string",
+          "ProcessedOn": "string(date-time)"
+        }
+      },
+      "Order.ValidateOrderCreationRequest": {
+        "fields": {
+          "OrderId": "integer(int32)",
+          "UserId": "integer(int32)",
+          "Email": "string",
+          "Phone": "string",
+          "Currency": "string",
+          "SumIncVat": "number(double)",
+          "BalanceIncVat": "number(double)",
+          "Items": "Order.ValidateOrderCreationRequest.StockItem[]"
+        }
+      },
+      "API.Order.OrderCreationValidationStatus": {
+        "fields": {
+          "Success": "boolean",
+          "Message": "string"
+        }
+      },
+      "API.Order.OrderComment": {
+        "fields": {
+          "OrderId": "integer(int32)",
+          "Comment": "string",
+          "System": "boolean"
+        }
+      },
+      "API.Order.TransactionData": {
+        "fields": {
+          "OrderId": "integer(int32)",
+          "TransactionId": "string"
+        }
+      },
+      "Order.Refund.Models.Write.ProcessedRefund": {
+        "fields": {
+          "ExternalId": "string",
+          "Reference": "string",
+          "ProcessedOn": "string(date-time)"
+        }
+      },
+      "Order.Refund.Models.Write.SettledRefund": {
+        "fields": {
+          "SettledByAdminUserId": "integer(int32)",
+          "SettledOn": "string(date-time)"
+        }
+      },
+      "Order.Refund.Models.Write.SettledRefundRow": {
+        "fields": {
+          "SettledByAdminUserId": "integer(int32)",
+          "SettledOn": "string(date-time)"
+        }
+      },
+      "Order.Refund.Models.Write.NewRefund": {
+        "fields": {
+          "OrderRowId": "integer(int32)",
+          "Reference": "string",
+          "Description": "string",
+          "Author": "string",
+          "RefundAmount": "number(double)",
+          "ToBalance": "boolean",
+          "Settled": "boolean",
+          "RefundType": "0|1|2|3",
+          "SkipRefundEvents": "boolean",
+          "RefundsRequireApproval": "boolean"
+        }
+      },
+      "Order.Refund.Models.Write.RefundApproval": {
+        "fields": {
+          "Approved": "boolean",
+          "ApprovalDecidedBy": "string",
+          "ApprovalDecidedOn": "string(date-time)"
+        }
+      },
+      "Order.Return.Models.Write.NewReturn": {
+        "fields": {
+          "ShippingFeeRefund": "number(double)",
+          "PaymentFeeRefund": "number(double)",
+          "ReturnFee": "number(double)",
+          "AdminUserId": "integer(int32)",
+          "Author": "string",
+          "Reference": "string",
+          "Description": "string",
+          "SkipReturnEvents": "boolean",
+          "SkipProductEvents": "boolean",
+          "SkipRefundEvents": "boolean",
+          "RefundsRequireApproval": "boolean",
+          "ReturnRows": "NewReturnRow[]",
+          "Settled": "boolean"
+        }
+      }
+    }
+  },
+  "PageArea": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/PageAreaFamily/List",
+        "summary": "List page area families",
+        "responseSchema": "PageArea.Models.Read.PageAreaFamily"
+      },
+      {
+        "method": "GET",
+        "path": "/API/PageAreaFamily/{familyId}",
+        "summary": "Get page area family",
+        "responseSchema": "PageArea.Models.Read.PageAreaFamily"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/PageAreaFamily/{familyId}",
+        "summary": "Delete page area family",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/PageArea/{name}",
+        "summary": "Get page area",
+        "responseSchema": "PageArea.Models.Read.PageArea"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/PageArea/{name}",
+        "summary": "Delete page area",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/PageAreaFamily",
+        "summary": "Create/update page area family",
+        "requestSchema": "PageArea.Models.Write.PageAreaFamily",
+        "responseSchema": "PageArea.Models.Read.PageAreaFamily"
+      },
+      {
+        "method": "POST",
+        "path": "/API/PageArea",
+        "summary": "Create/update page area",
+        "requestSchema": "PageArea.Models.Write.PageArea",
+        "responseSchema": "PageArea.Models.Read.PageArea"
+      }
+    ],
+    "schemas": {
+      "PageArea.Models.Read.PageAreaFamily": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string",
+          "FilterableProperties": "string",
+          "Areas": "PageArea.Models.Read.PageArea[]"
+        }
+      },
+      "PageArea.Models.Read.PageArea": {
+        "fields": {
+          "Index": "integer(int32)",
+          "Name": "string",
+          "FamilyId": "integer(int32)",
+          "Settings": "string",
+          "Containers": "PageArea.Models.Read.PageWidgetContainer[]"
+        }
+      },
+      "PageArea.Models.Write.PageAreaFamily": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string",
+          "FilterableProperties": "array",
+          "Areas": "PageArea.Models.Write.PageArea[]"
+        }
+      },
+      "PageArea.Models.Write.PageArea": {
+        "fields": {
+          "Index": "integer(int32)",
+          "Name": "string",
+          "FamilyId": "integer(int32)",
+          "Settings": "Nullable-ValidationConfiguration"
+        }
+      },
+      "PageArea.Models.Read.PageWidgetContainer": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string",
+          "ClassNames": "array",
+          "Active": "boolean",
+          "Layout": "string",
+          "ResponsiveMode": "string",
+          "Visibility": "string",
+          "Design": "string",
+          "Widgets": "PageArea.Models.Read.PageWidget[]"
+        }
+      },
+      "PageArea.Models.Read.PageWidget": {
+        "fields": {
+          "Id": "string(uuid)",
+          "Name": "string",
+          "Type": "string",
+          "Active": "boolean",
+          "ClassNames": "array",
+          "Size": "string",
+          "Configuration": "string"
+        }
+      }
+    }
+  },
+  "Payment": {
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/API/Payment/Query",
+        "summary": "Query payment options",
+        "requestSchema": "Payment.Models.PaymentOptionQuery"
+      }
+    ],
+    "schemas": {
+      "Payment.Models.PaymentOptionQuery": {
+        "fields": {
+          "SiteId": "integer(int32)",
+          "Email": "string",
+          "CustomerTypeId": "integer(int32)",
+          "CountryId": "integer(int32)",
+          "Sum": "number(double)"
+        }
+      }
+    }
+  },
+  "PriceList": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/PriceList/List",
+        "summary": "List price lists"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/PriceList/Price",
+        "summary": "Update price list prices",
+        "responseSchema": "PriceList.Models.PriceListPriceResponse"
+      },
+      {
+        "method": "GET",
+        "path": "/API/PriceList/{id}",
+        "summary": "Get a price list by id",
+        "responseSchema": "PriceList.Models.Read.PriceList"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/PriceList/{id}",
+        "summary": "Update a price list",
+        "requestSchema": "PriceList.Models.Write.PriceList",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/PriceList/{id}",
+        "summary": "Delete a price list",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/PriceList",
+        "summary": "Create a new price list",
+        "requestSchema": "PriceList.Models.Write.PriceList",
+        "responseSchema": "PriceList.Models.Read.PriceList"
+      }
+    ],
+    "schemas": {
+      "PriceList.Models.PriceListPriceResponse": {
+        "fields": {
+          "Message": "string",
+          "Invalid": "PriceList.Models.Write.PriceListPrice[]",
+          "NotFound": "PriceList.Models.Write.PriceListPrice[]",
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "PriceList.Models.Read.PriceList": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string",
+          "MarketId": "integer(int32)",
+          "MarketPrefix": "string",
+          "Currency": "string",
+          "Forced": "boolean",
+          "CreatedAt": "string(date-time)",
+          "Identifier": "string",
+          "Active": "boolean"
+        }
+      },
+      "PriceList.Models.Write.PriceList": {
+        "fields": {
+          "Name": "string",
+          "MarketId": "integer(int32)",
+          "Forced": "boolean",
+          "AssignedCustomerGroups": "array",
+          "Identifier": "string",
+          "Active": "boolean"
+        }
+      },
+      "PriceList.Models.Write.PriceListPrice": {
+        "fields": {
+          "PriceListId": "integer(int32)",
+          "Price": "number(double)",
+          "ProductId": "string",
+          "Currency": "string",
+          "StaggeredCount": "integer(int32)"
+        }
+      },
+      "PriceList.Models.Read.PriceListPrice": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "PriceListId": "integer(int32)",
+          "PriceListName": "string",
+          "PriceIncVat": "number(double)",
+          "PriceExVat": "number(double)",
+          "VatRate": "number(double)",
+          "Country": "string",
+          "Currency": "string",
+          "StaggeredCount": "integer(int32)",
+          "ValidFrom": "string(date-time)",
+          "ValidTo": "string(date-time)"
+        }
+      }
+    }
+  },
+  "Product": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Product/{productId}",
+        "summary": "Get product",
+        "responseSchema": "Product.Models.Read.Product"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}",
+        "summary": "Update product",
+        "requestSchema": "Product.Models.Write.Product",
+        "responseSchema": "Product.Models.Read.Product"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Product/{productId}",
+        "summary": "Delete product",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/Query",
+        "summary": "Query products",
+        "requestSchema": "Product.Models.ProductQuery",
+        "responseSchema": "Product.Models.Read.Product"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/Query/{page}",
+        "summary": "Query products (paged)",
+        "requestSchema": "Product.Models.ProductQuery",
+        "responseSchema": "Product.Models.Read.Product"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product",
+        "summary": "Create product",
+        "requestSchema": "Product.Models.Write.Product",
+        "responseSchema": "Product.Models.Read.Product"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}/Category",
+        "summary": "Add category to product",
+        "requestSchema": "Product.Models.ProductCategory",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/MonitorAvailability",
+        "summary": "Add availability monitor",
+        "requestSchema": "Product.Models.MonitorSku",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/Item/{itemId}",
+        "summary": "Get product item",
+        "responseSchema": "Product.Models.ProductItemEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/Item/{itemId}",
+        "summary": "Update product item",
+        "requestSchema": "Product.Models.Write.ProductItem",
+        "responseSchema": "Product.Models.Read.ProductItem"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/Items",
+        "summary": "List product items"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/Items",
+        "summary": "Update product items (batch)",
+        "responseSchema": "Product.Models.Read.ProductItemResult"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/Items/{page}",
+        "summary": "List product items (paged)",
+        "responseSchema": "Product.Models.Read.ProductItem"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/{productId}/Item",
+        "summary": "Create product item",
+        "requestSchema": "Product.Models.Write.ProductItem",
+        "responseSchema": "Product.Models.Read.ProductItem"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/Stock",
+        "summary": "Update stock (batch)",
+        "responseSchema": "Product.Models.StockEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/Stock/Query",
+        "summary": "Query stock",
+        "responseSchema": "Product.Models.Read.ProductItemStock"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/Feeds",
+        "summary": "List feeds",
+        "responseSchema": "Product.Models.Read.Feed"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/RelationTypes",
+        "summary": "List product relation types",
+        "responseSchema": "Product.Models.Read.RelationType"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/RelationTypes",
+        "summary": "Create product relation type",
+        "requestSchema": "Product.Models.Write.RelationType",
+        "responseSchema": "Envelope-Int"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/RelationTypes/{id}",
+        "summary": "Get product relation type",
+        "responseSchema": "Product.Models.Read.RelationType"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/RelationTypes/{id}",
+        "summary": "Update product relation type",
+        "requestSchema": "Product.Models.Write.RelationType",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Product/RelationTypes/{id}",
+        "summary": "Delete product relation type",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}/Related/{relationTypeId}",
+        "summary": "Link related products",
+        "responseSchema": "Product.Models.RelatedProductEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}/Related",
+        "summary": "Add related products to a product",
+        "responseSchema": "Product.Models.RelatedProductEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}/UnlinkRelated/{relationTypeId}",
+        "summary": "Unlink related products (via relation).",
+        "responseSchema": "Product.Models.RelatedProductEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/SortOrder",
+        "summary": "Update product sort orders (batch)",
+        "responseSchema": "Product.Models.SortOrderEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/PurchasePrice",
+        "summary": "Update product purchase prices (batch)",
+        "responseSchema": "Product.Models.PurchasePriceEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Product/{productId}/Parameter/{parameterId}",
+        "summary": "Get product parameter value",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterValue"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/{productId}/Parameter/{parameterId}",
+        "summary": "Add product parameter value to product",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValueItem",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterValue"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Product/{productId}/Parameter/{parameterId}",
+        "summary": "Remove product parameter assignment from product",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Product/Parameter/Values",
+        "summary": "Update product parameter values (batch)",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValueBatch",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/Parameter/Values",
+        "summary": "Replace product parameter values (batch)",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValueBatch",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PATCH",
+        "path": "/API/Product/Parameter/Values/Remove",
+        "summary": "Remove multiple product parameter assignments from products.",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterAssignmentBatch",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {
+      "Product.Models.Read.Product": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "ArticleNumber": "string",
+          "Names": "Shared.Models.LocalizableContent[]",
+          "DateCreated": "string(date-time)",
+          "DateUpdated": "string(date-time)",
+          "DateFirstAvailable": "string(date-time)",
+          "MaxDiscountPercentage": "integer(int32)",
+          "Active": "boolean",
+          "PurchasePrice": "number(double)",
+          "PurchasePriceCurrency": "string",
+          "ShortTexts": "Shared.Models.LocalizableContent[]",
+          "LongTexts": "Shared.Models.LocalizableContent[]",
+          "TechTexts": "Shared.Models.LocalizableContent[]",
+          "Items": "Product.Models.Read.ProductItem[]",
+          "Prices": "PriceList.Models.Read.PriceListPrice[]",
+          "Categories": "Category.Models.Read.Category[]",
+          "Images": "Product.Models.Read.Image[]",
+          "BrandId": "integer(int32)",
+          "BrandName": "string",
+          "SupplierId": "integer(int32)",
+          "SupplierName": "string",
+          "ParameterValues": "ProductParameter.Models.Read.ProductParameterValue[]",
+          "Variants": "Variant.Models.Read.Variant[]",
+          "Markets": "Market.Models.Market[]",
+          "Vat": "number(double)",
+          "PrimaryImage": "string",
+          "FreightClassId": "integer(int32)",
+          "IntrastatCode": "string",
+          "CountryOfOrigin": "string",
+          "VariantGroupId": "integer(int32)",
+          "VatId": "integer(int32)",
+          "ExternalId": "string",
+          "ActivationDate": "string(date-time)",
+          "Feeds": "Product.Models.Read.FeedMembership[]",
+          "Urls": "Product.Models.Read.ProductUrl[]",
+          "MainCategoryId": "integer(int32)",
+          "RelatedProducts": "Product.Models.Read.RelatedProduct[]",
+          "DiscountCampaigns": "Product.Models.Read.DiscountCampaign[]",
+          "LowestPrice": "Product.Models.Read.LowestPriceItem[]",
+          "SortOrder": "Product.Models.Read.SortOrder",
+          "Weight": "integer(int32)",
+          "Length": "integer(int32)",
+          "Width": "integer(int32)",
+          "Height": "integer(int32)"
+        }
+      },
+      "Product.Models.Write.Product": {
+        "fields": {
+          "ArticleNumber": "string",
+          "Names": "Shared.Models.LocalizableContent[]",
+          "Active": "boolean",
+          "PurchasePrice": "number(double)",
+          "PurchasePriceCurrency": "string",
+          "ShortTexts": "Shared.Models.LocalizableContent[]",
+          "LongTexts": "Shared.Models.LocalizableContent[]",
+          "TechTexts": "Shared.Models.LocalizableContent[]",
+          "BrandId": "integer(int32)",
+          "MaxDiscountPercentage": "integer(int32)",
+          "SupplierId": "integer(int32)",
+          "Items": "Product.Models.Write.ProductItem[]",
+          "CategoryIds": "array",
+          "ParameterValues": "ProductParameter.Models.Write.ProductParameterValue[]",
+          "Variants": "Variant.Models.Write.Variant[]",
+          "Markets": "Market.Models.Market[]",
+          "FreightClassId": "integer(int32)",
+          "IntrastatCode": "string",
+          "CountryOfOrigin": "string",
+          "VariantGroupId": "integer(int32)",
+          "Vat": "integer(int32)",
+          "VatType": "string",
+          "ExternalId": "string",
+          "ActivationDate": "string(date-time)",
+          "Weight": "integer(int32)",
+          "Length": "integer(int32)",
+          "Width": "integer(int32)",
+          "Height": "integer(int32)",
+          "SortOrder": "Product.Models.Write.SortOrder"
+        }
+      },
+      "Product.Models.ProductQuery": {
+        "fields": {
+          "UpdatedAfter": "string(date-time)",
+          "CreatedAfter": "string(date-time)",
+          "CreatedBefore": "string(date-time)",
+          "ProductIds": "array",
+          "CategoryIds": "array",
+          "BrandIds": "array",
+          "SupplierIds": "array",
+          "ArticleNumbers": "array",
+          "OnlySellable": "boolean",
+          "OnlyInStock": "boolean",
+          "FeedId": "integer(int32)",
+          "BatchId": "string(uuid)"
+        }
+      },
+      "Product.Models.ProductCategory": {
+        "fields": {
+          "CategoryId": "integer(int32)"
+        }
+      },
+      "Product.Models.MonitorSku": {
+        "fields": {
+          "SiteId": "integer(int32)",
+          "LanguageCode": "string",
+          "Email": "string",
+          "SkuId": "integer(int32)"
+        }
+      },
+      "Product.Models.ProductItemEnvelope": {
+        "fields": {
+          "Message": "string",
+          "Item": "Product.Models.Read.ProductItem"
+        }
+      },
+      "Product.Models.Write.ProductItem": {
+        "fields": {
+          "ItemId": "integer(int32)",
+          "ArticleNumber": "string",
+          "Name": "string",
+          "Shelf": "string",
+          "Weight": "integer(int32)",
+          "Length": "integer(int32)",
+          "Width": "integer(int32)",
+          "Height": "integer(int32)",
+          "Gtin": "string",
+          "Active": "boolean",
+          "ExternalId": "string",
+          "DateIncoming": "string(date-time)"
+        }
+      },
+      "Product.Models.Read.ProductItem": {
+        "fields": {
+          "ItemId": "integer(int32)",
+          "ArticleNumber": "string",
+          "ProductId": "integer(int32)",
+          "Name": "string",
+          "Shelf": "string",
+          "Weight": "integer(int32)",
+          "Length": "integer(int32)",
+          "Width": "integer(int32)",
+          "Height": "integer(int32)",
+          "Gtin": "string",
+          "DateCreated": "string(date-time)",
+          "DateUpdated": "string(date-time)",
+          "DateIncoming": "string(date-time)",
+          "Active": "boolean",
+          "ExternalId": "string",
+          "Stock": "Product.Models.Read.ProductItemStock",
+          "ShippingFees": "Product.Models.Read.ShippingFee[]"
+        }
+      },
+      "Product.Models.Read.ProductItemResult": {
+        "fields": {
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "Product.Models.StockEnvelope": {
+        "fields": {
+          "Message": "string",
+          "Invalid": "Product.Models.Write.ProductItemStock[]",
+          "NotFound": "Product.Models.Write.ProductItemStock[]",
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "Product.Models.Read.ProductItemStock": {
+        "fields": {
+          "ItemId": "integer(int32)",
+          "Stock": "integer(int32)",
+          "StockOversellable": "integer(int32)",
+          "StockStatic": "integer(int32)",
+          "StockSellable": "integer(int32)"
+        }
+      },
+      "Product.Models.Read.Feed": {
+        "fields": {
+          "FeedId": "integer(int32)",
+          "Name": "string",
+          "Url": "string",
+          "Layout": "string",
+          "Market": "integer(int32)",
+          "Language": "string",
+          "DefaultCurrency": "string",
+          "DefaultCountry": "string"
+        }
+      },
+      "Product.Models.Read.RelationType": {
+        "fields": {
+          "Id": "integer(int32)",
+          "Name": "string",
+          "Order": "integer(int32)"
+        }
+      },
+      "Product.Models.Write.RelationType": {
+        "fields": {
+          "Name": "string",
+          "Order": "integer(int32)"
+        }
+      },
+      "Product.Models.RelatedProductEnvelope": {
+        "fields": {
+          "Message": "string",
+          "Invalid": "Product.Models.Write.RelatedProduct[]",
+          "NotFound": "Product.Models.Write.RelatedProduct[]",
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "Product.Models.SortOrderEnvelope": {
+        "fields": {
+          "Message": "string",
+          "Invalid": "Product.Models.Write.SortOrderBatchItem[]",
+          "NotFound": "Product.Models.Write.SortOrderBatchItem[]",
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "Product.Models.PurchasePriceEnvelope": {
+        "fields": {
+          "Message": "string",
+          "Invalid": "Product.Models.Write.PurchasePriceBatchItem[]",
+          "NotFound": "Product.Models.Write.PurchasePriceBatchItem[]",
+          "UpdateCount": "integer(int32)"
+        }
+      },
+      "Product.Models.Read.UploadedImage": {
+        "fields": {
+          "FileName": "string"
+        }
+      },
+      "Product.Models.Read.Image": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "Url": "string",
+          "Order": "integer(int32)",
+          "Tags": "array"
+        }
+      },
+      "Product.Models.Read.FeedMembership": {
+        "fields": {
+          "FeedId": "integer(int32)",
+          "AllowSale": "boolean"
+        }
+      },
+      "Product.Models.Read.ProductUrl": {
+        "fields": {
+          "Url": "string",
+          "Market": "integer(int32)",
+          "Countries": "array",
+          "Language": "string"
+        }
+      },
+      "Product.Models.Read.RelatedProduct": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "RelatedProductId": "integer(int32)",
+          "RelationTypeId": "integer(int32)"
+        }
+      },
+      "Product.Models.Read.DiscountCampaign": {
+        "fields": {
+          "CampaignId": "string(uuid)",
+          "CampaignName": "string",
+          "Title": "string",
+          "HideTitle": "boolean",
+          "RuleType": "string",
+          "Category": "string",
+          "Enabled": "boolean",
+          "ValidFrom": "string(date-time)",
+          "ValidTo": "string(date-time)",
+          "Markets": "string",
+          "Action": "string",
+          "ActionValue": "string",
+          "Quantity": "integer(int32)",
+          "Titles": "Shared.Models.LocalizableContent[]",
+          "Urls": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "Product.Models.Read.LowestPriceItem": {
+        "fields": {
+          "LowestPrice": "number(double)",
+          "ComparisonPrice": "number(double)",
+          "MarketId": "integer(int32)",
+          "Currency": "string"
+        }
+      },
+      "Product.Models.Read.SortOrder": {
+        "fields": {
+          "Default": "integer(int32)",
+          "Custom1": "integer(int32)",
+          "Custom2": "integer(int32)",
+          "Custom3": "integer(int32)",
+          "Custom4": "integer(int32)",
+          "Custom5": "integer(int32)"
+        }
+      },
+      "Product.Models.Read.ShippingFee": {
+        "fields": {
+          "Market": "integer(int32)",
+          "Country": "string",
+          "Service": "string",
+          "ServiceId": "integer(int32)",
+          "Fee": "number(double)"
+        }
+      },
+      "Product.Models.Write.SortOrder": {
+        "fields": {
+          "Custom1": "integer(int32)",
+          "Custom2": "integer(int32)",
+          "Custom3": "integer(int32)",
+          "Custom4": "integer(int32)",
+          "Custom5": "integer(int32)"
+        }
+      },
+      "Product.Models.Write.ProductItemStock": {
+        "fields": {
+          "Id": "string",
+          "Stock": "integer(int32)",
+          "StockSellable": "integer(int32)",
+          "StockType": "0|1|2"
+        }
+      },
+      "Product.Models.Write.RelatedProduct": {
+        "fields": {
+          "RelatedProductId": "string",
+          "RelationTypeId": "integer(int32)"
+        }
+      },
+      "Product.Models.Write.SortOrderBatchItem": {
+        "fields": {
+          "Id": "string",
+          "Custom1": "integer(int32)",
+          "Custom2": "integer(int32)",
+          "Custom3": "integer(int32)",
+          "Custom4": "integer(int32)",
+          "Custom5": "integer(int32)"
+        }
+      },
+      "Product.Models.Write.PurchasePriceBatchItem": {
+        "fields": {
+          "Id": "string",
+          "PurchasePrice": "number(double)",
+          "PurchasePriceCurrency": "string"
+        }
+      }
+    }
+  },
+  "ProductImage": {
+    "endpoints": [
+      {
+        "method": "PUT",
+        "path": "/API/Product/{productId}/Image/{imageName}",
+        "summary": "Add/update product image",
+        "responseSchema": "Product.Models.Read.UploadedImage"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Product/{productId}/Image/{imageName}",
+        "summary": "Add product image",
+        "responseSchema": "Product.Models.Read.UploadedImage"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Product/{productId}/Image/{imageName}",
+        "summary": "Delete product image",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {}
+  },
+  "ProductParameter": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/ProductParameter/{id}",
+        "summary": "Get product parameter",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameter"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/ProductParameter/{id}",
+        "summary": "Update product parameter",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameter",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameter"
+      },
+      {
+        "method": "POST",
+        "path": "/API/ProductParameter",
+        "summary": "Create product parameter",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameter",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameter"
+      },
+      {
+        "method": "GET",
+        "path": "/API/ProductParameter/Group/{id}",
+        "summary": "Get product parameter group",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterGroup"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/ProductParameter/Group/{id}",
+        "summary": "Update product parameter group",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterGroup",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterGroup"
+      },
+      {
+        "method": "POST",
+        "path": "/API/ProductParameter/Group",
+        "summary": "Create product parameter group",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterGroup",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterGroup"
+      },
+      {
+        "method": "GET",
+        "path": "/API/ProductParameter/Value/{id}",
+        "summary": "Get product parameter value (Obsolete)",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterValue"
+      },
+      {
+        "method": "POST",
+        "path": "/API/ProductParameter/Value",
+        "summary": "Create/update product parameter value (Obsolete)",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValue",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterValue"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/ProductParameter/Values",
+        "summary": "Update product parameter values (batch) (Obsolete)",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValueBatch",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/ProductParameter/Values",
+        "summary": "Replace product parameter values (batch) (Obsolete)",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterValueBatch",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/ProductParameter/PredefinedValue/{id}",
+        "summary": "Get product parameter predefined value",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterPredefinedValue"
+      },
+      {
+        "method": "POST",
+        "path": "/API/ProductParameter/PredefinedValue",
+        "summary": "Create product parameter predefined value",
+        "requestSchema": "ProductParameter.Models.Write.ProductParameterPredefinedValue",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterPredefinedValue"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/ProductParameter/PredefinedValue/{predefinedValueId}",
+        "summary": "Update product parameter predefined value names",
+        "responseSchema": "ProductParameter.Models.Read.ProductParameterPredefinedValue"
+      }
+    ],
+    "schemas": {
+      "ProductParameter.Models.Read.ProductParameterValue": {
+        "fields": {
+          "ParameterValueId": "integer(int32)",
+          "ProductId": "integer(int32)",
+          "ParameterId": "integer(int32)",
+          "ParameterName": "string",
+          "GroupId": "integer(int32)",
+          "GroupName": "string",
+          "ParameterType": "1|2|3|4|5|6|7",
+          "Value": "string",
+          "Description": "string",
+          "LocalizedDescriptions": "Shared.Models.LocalizableContent[]",
+          "InternalIdentifier": "string",
+          "Order": "string"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterValueItem": {
+        "fields": {
+          "Value": "string",
+          "LocalizedDescriptions": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterValueBatch": {
+        "fields": {
+          "productParameterValues": "ProductParameter.Models.Write.ProductParameterValue[]"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterAssignmentBatch": {
+        "fields": {
+          "ProductParameterAssignments": "ProductParameter.Models.Write.ProductParameterAssignment[]"
+        }
+      },
+      "ProductParameter.Models.Read.ProductParameter": {
+        "fields": {
+          "ParameterId": "integer(int32)",
+          "GroupId": "integer(int32)",
+          "GroupName": "string",
+          "ParameterType": "1|2|3|4|5|6|7",
+          "Name": "string",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]",
+          "PredefinedValues": "ProductParameter.Models.Read.ProductParameterPredefinedValue[]"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameter": {
+        "fields": {
+          "ParameterId": "integer(int32)",
+          "GroupId": "integer(int32)",
+          "ParameterType": "1|2|3|4|5|6|7",
+          "Name": "string",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "ProductParameter.Models.Read.ProductParameterGroup": {
+        "fields": {
+          "GroupId": "integer(int32)",
+          "Name": "string",
+          "Order": "integer(int32)",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]",
+          "ParameterIds": "array"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterGroup": {
+        "fields": {
+          "Name": "string",
+          "Order": "integer(int32)",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]",
+          "ParameterIds": "array"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterValue": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "ParameterId": "integer(int32)",
+          "Value": "string",
+          "LocalizedDescriptions": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "ProductParameter.Models.Read.ProductParameterPredefinedValue": {
+        "fields": {
+          "ParameterId": "integer(int32)",
+          "PredefinedValueId": "integer(int32)",
+          "Name": "string",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterPredefinedValue": {
+        "fields": {
+          "ParameterId": "integer(int32)",
+          "PredefinedValueId": "integer(int32)",
+          "Name": "string",
+          "LocalizedNames": "Shared.Models.LocalizableContent[]"
+        }
+      },
+      "ProductParameter.Models.Write.ProductParameterAssignment": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "ParameterId": "integer(int32)"
+        }
+      }
+    }
+  },
+  "Redirect": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/redirect/url/{page}",
+        "summary": "Get a list of URLs that should be redirected.",
+        "responseSchema": "Redirect.Models.UrlRedirect"
+      },
+      {
+        "method": "GET",
+        "path": "/API/redirect/alias/{page}",
+        "summary": "Get a list of aliases that should be redirected.",
+        "responseSchema": "Redirect.Models.UrlRedirect"
+      }
+    ],
+    "schemas": {
+      "Redirect.Models.UrlRedirect": {
+        "fields": {
+          "OldUrl": "string",
+          "NewUrl": "string",
+          "MarketId": "integer(int32)",
+          "Action": "string"
+        }
+      }
+    }
+  },
+  "Refund": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Order/{orderId}/Refund/{refundId}",
+        "summary": "Get refund",
+        "responseSchema": "Refund"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Order/{orderId}/Refund/List",
+        "summary": "List refunds",
+        "responseSchema": "Refund"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Refund/Query",
+        "summary": "Query refunds",
+        "requestSchema": "RefundQuery",
+        "responseSchema": "Refund"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Refund/{refundId}/SetAsProcessed",
+        "summary": "Set refund as processed",
+        "requestSchema": "Order.Refund.Models.Write.ProcessedRefund",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Refund/{refundId}/SetAsSettled",
+        "summary": "Set refund as settled",
+        "requestSchema": "Order.Refund.Models.Write.SettledRefund",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Refund/{refundId}/RefundRow/{refundRowId}/SetAsSettled",
+        "summary": "Set refund row as settled",
+        "requestSchema": "Order.Refund.Models.Write.SettledRefundRow",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Order/{orderId}/Refund/{refundId}/RefundRow/{refundRowId}",
+        "summary": "Delete refund row",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Refund",
+        "summary": "Creates refund",
+        "requestSchema": "Order.Refund.Models.Write.NewRefund",
+        "responseSchema": "Envelope-Nullable-Guid"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Refund/{refundId}/SetApproval",
+        "summary": "Set refund approval",
+        "requestSchema": "Order.Refund.Models.Write.RefundApproval",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {
+      "Refund": {
+        "fields": {
+          "RefundId": "string(uuid)",
+          "RefundInstanceId": "integer(int32)",
+          "OrderId": "integer(int32)",
+          "Reference": "string",
+          "Description": "string",
+          "Author": "string",
+          "ExternalOrderId": "string",
+          "OrderTransactionId": "string",
+          "SecondaryOrderTransactionId": "string",
+          "ExternalId": "string",
+          "PaymentName": "string",
+          "Locale": "string",
+          "SiteName": "string",
+          "Customer": "string",
+          "OrderSum": "number(double)",
+          "OrderVat": "number(double)",
+          "OrderValue": "number(double)",
+          "OrderDiscount": "number(double)",
+          "ShippingFee": "number(double)",
+          "PaymentFee": "number(double)",
+          "Currency": "string",
+          "CreatedOn": "string(date-time)",
+          "SentOn": "string(date-time)",
+          "ProcessedOn": "string(date-time)",
+          "Sent": "boolean",
+          "Processed": "boolean",
+          "RequiresApproval": "boolean",
+          "Approved": "boolean",
+          "ApprovalDecidedBy": "string",
+          "ApprovalDecidedOn": "string(date-time)",
+          "VatRate": "number(double)",
+          "SkipRefundEvents": "boolean",
+          "RefundedItemTotal": "number(double)",
+          "RefundedShippingFee": "number(double)",
+          "OrderStatus": "string",
+          "RefundedPaymentFee": "number(double)",
+          "RefundedDiscount": "number(double)",
+          "Shipped": "boolean",
+          "RefundedBalance": "number(double)",
+          "RefundedTotal": "number(double)",
+          "RefundRows": "RefundRow[]",
+          "Rows": "Refund.Core.Models.Order.OrderRow[]"
+        }
+      },
+      "RefundQuery": {
+        "fields": {
+          "CreatedAfter": "string(date-time)",
+          "CreatedBefore": "string(date-time)",
+          "ApprovedAfter": "string(date-time)",
+          "ApprovedBefore": "string(date-time)",
+          "UpdatedAfter": "string(date-time)",
+          "UpdatedBefore": "string(date-time)",
+          "IncludeStatuses": "array",
+          "ExcludeStatuses": "array"
+        }
+      }
+    }
+  },
+  "Return": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Order/{orderId}/Return/{returnId}",
+        "summary": "Get return",
+        "responseSchema": "Return"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Order/{orderId}/Return/List",
+        "summary": "List returns",
+        "responseSchema": "Return"
+      },
+      {
+        "method": "GET",
+        "path": "/API/ReturnCode/List",
+        "summary": "List return codes",
+        "responseSchema": "ReturnCode"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Order/{orderId}/Return",
+        "summary": "Create return",
+        "requestSchema": "Order.Return.Models.Write.NewReturn",
+        "responseSchema": "Envelope-Nullable-Int"
+      }
+    ],
+    "schemas": {
+      "Return": {
+        "fields": {
+          "ReturnId": "integer(int32)",
+          "OrderId": "integer(int32)",
+          "CreatedOn": "string(date-time)",
+          "ReturnRows": "ReturnRow[]",
+          "OrderRows": "Refund.Core.Models.Order.OrderRow[]"
+        }
+      },
+      "ReturnCode": {
+        "fields": {
+          "Code": "integer(int32)",
+          "Name": "string",
+          "AddToStock": "boolean",
+          "DefaultReturnAction": "integer(int32)"
+        }
+      }
+    }
+  },
+  "Shipping": {
+    "endpoints": [
+      {
+        "method": "POST",
+        "path": "/API/Shipping/Query",
+        "summary": "Query shipping options",
+        "requestSchema": "Shipping.Models.ShippingQuery"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Shipping/ParcelGroup/Query",
+        "summary": "Query parcel groups",
+        "requestSchema": "Shipping.Models.ParcelGroupQuery",
+        "responseSchema": "Shipping.Models.Read.ParcelGroup"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Shipping/ParcelGroup",
+        "summary": "Create parcel group",
+        "requestSchema": "Shipping.Models.ParcelGroupOptions",
+        "responseSchema": "Envelope-Int"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Shipping/ParcelGroup/{parcelGroupId}/Deliver",
+        "summary": "Deliver parcel group",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Shipping/ParcelGroup/{parcelGroupId}/Capture",
+        "summary": "Capture parcel group",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {
+      "Shipping.Models.ShippingQuery": {
+        "fields": {
+          "SiteId": "integer(int32)",
+          "CountryId": "integer(int32)",
+          "ShippingId": "integer(int32)",
+          "DeliveryOptionId": "string(uuid)",
+          "Order": "Order.CheckoutOrder",
+          "MinimumFreeShippingLimit": "number(double)"
+        }
+      },
+      "Shipping.Models.ParcelGroupQuery": {
+        "fields": {
+          "ParcelGroupIds": "array",
+          "OrderIds": "array"
+        }
+      },
+      "Shipping.Models.Read.ParcelGroup": {
+        "fields": {
+          "ParcelGroupId": "integer(int32)",
+          "CreatedDate": "string(date-time)",
+          "DeliveredDate": "string(date-time)",
+          "Parcels": "Shipping.Models.Read.Parcel[]"
+        }
+      },
+      "Shipping.Models.ParcelGroupOptions": {
+        "fields": {
+          "OrderIds": "array",
+          "OrderRowIds": "array",
+          "MarkAsDelivered": "boolean",
+          "SendDeliveryEmail": "boolean",
+          "SignalCapturesCreated": "boolean"
+        }
+      },
+      "Shipping.Models.Read.Parcel": {
+        "fields": {
+          "ParcelGroupId": "integer(int32)",
+          "ParcelId": "integer(int32)",
+          "OrderId": "integer(int32)",
+          "OrderRowIds": "array",
+          "CreatedDate": "string(date-time)"
+        }
+      }
+    }
+  },
+  "Sitemap": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Sitemap/{market}",
+        "summary": "Get sitemap",
+        "responseSchema": "JsonSitemap"
+      }
+    ],
+    "schemas": {
+      "JsonSitemap": {
+        "fields": {
+          "Urlset": "JsonSitemap.UrlEntry[]"
+        }
+      }
+    }
+  },
+  "Supplier": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Supplier/{id}",
+        "summary": "Get supplier",
+        "responseSchema": "Supplier.Models.Read.Supplier"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Supplier/{id}",
+        "summary": "Update supplier",
+        "requestSchema": "Supplier.Models.Write.Supplier",
+        "responseSchema": "Supplier.Models.Read.Supplier"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Supplier/Query",
+        "summary": "Query suppliers",
+        "requestSchema": "Supplier.Models.SupplierQuery"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Supplier",
+        "summary": "Create supplier",
+        "requestSchema": "Supplier.Models.Write.Supplier",
+        "responseSchema": "Supplier.Models.Read.Supplier"
+      }
+    ],
+    "schemas": {
+      "Supplier.Models.Read.Supplier": {
+        "fields": {
+          "SupplierId": "integer(int32)",
+          "Name": "string",
+          "Address1": "string",
+          "Address2": "string",
+          "Address3": "string",
+          "ZipCode": "string",
+          "City": "string",
+          "Country": "string",
+          "ContactPerson": "string",
+          "Phone1": "string",
+          "Phone2": "string",
+          "Email": "string",
+          "ExternalId": "string"
+        }
+      },
+      "Supplier.Models.Write.Supplier": {
+        "fields": {
+          "Name": "string",
+          "Address1": "string",
+          "Address2": "string",
+          "Address3": "string",
+          "ZipCode": "string",
+          "City": "string",
+          "Country": "string",
+          "ContactPerson": "string",
+          "Phone1": "string",
+          "Phone2": "string",
+          "Email": "string",
+          "ExternalId": "string"
+        }
+      },
+      "Supplier.Models.SupplierQuery": {
+        "fields": {
+          "NameContains": "string",
+          "ExternalIds": "array"
+        }
+      }
+    }
+  },
+  "User": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/User/{userId}",
+        "summary": "Get user profile (id)",
+        "responseSchema": "User.Models.Read.UserProfile"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/User/{userId}",
+        "summary": "Delete user profile (id)",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PATCH",
+        "path": "/API/User/{userId}",
+        "summary": "Update user profile",
+        "requestSchema": "User.Models.Write.UserProfile",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/User/{email}",
+        "summary": "Get user profile (email)",
+        "responseSchema": "User.Models.Read.UserProfile"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/User/{email}",
+        "summary": "Delete user profile (email)",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/User/Query/{page}",
+        "summary": "Query user profiles",
+        "requestSchema": "User.Models.UserProfileQuery",
+        "responseSchema": "User.Models.Read.UserProfile"
+      },
+      {
+        "method": "POST",
+        "path": "/API/User",
+        "summary": "Create user profile",
+        "requestSchema": "User.Models.Write.UserProfile",
+        "responseSchema": "User.Models.Read.UserProfile"
+      },
+      {
+        "method": "GET",
+        "path": "/API/BalanceType/List",
+        "summary": "Get user balance types",
+        "responseSchema": "User.Models.Read.BalanceType"
+      },
+      {
+        "method": "GET",
+        "path": "/API/User/{userId}/Balance/{currency}",
+        "summary": "Get user balance",
+        "responseSchema": "User.Models.Read.Balance"
+      },
+      {
+        "method": "GET",
+        "path": "/API/User/{userId}/BalanceTransaction/List/{currency}",
+        "summary": "Get user balance transactions",
+        "responseSchema": "User.Models.Read.BalanceTransaction"
+      },
+      {
+        "method": "POST",
+        "path": "/API/User/{userId}/Balance",
+        "summary": "Add user balance",
+        "requestSchema": "User.Models.Write.BalanceTransaction",
+        "responseSchema": "BaseEnvelope"
+      }
+    ],
+    "schemas": {
+      "User.Models.Read.UserProfile": {
+        "fields": {
+          "UserId": "integer(int32)",
+          "SiteId": "integer(int32)",
+          "Email": "string",
+          "FirstName": "string",
+          "LastName": "string",
+          "PhoneNr": "string",
+          "MobilePhoneNr": "string",
+          "Company": "string",
+          "Address": "string",
+          "Address2": "string",
+          "Address3": "string",
+          "DoorCode": "string",
+          "PersonalId": "string",
+          "Birthyear": "string",
+          "Zip": "string",
+          "City": "string",
+          "CareOf": "string",
+          "Country": "string",
+          "State": "string",
+          "CustomerGroupId": "integer(int32)",
+          "CustomerGroupName": "string",
+          "MemberId": "integer(int32)",
+          "MemberType": "string",
+          "CountryId": "integer(int32)",
+          "UserTypeId": "integer(int32)",
+          "GenderType": "0|1|2",
+          "MemberDiscount": "integer(int32)",
+          "Newsletter": "boolean",
+          "Blacklisted": "boolean",
+          "Active": "boolean",
+          "CreatedOn": "string(date-time)",
+          "UpdatedOn": "string(date-time)",
+          "MetaData": "string",
+          "BlacklistedOn": "string(date-time)",
+          "BlacklistReason": "string"
+        }
+      },
+      "User.Models.Write.UserProfile": {
+        "fields": {
+          "SiteId": "integer(int32)",
+          "Email": "string",
+          "FirstName": "string",
+          "LastName": "string",
+          "PhoneNr": "string",
+          "MobilePhoneNr": "string",
+          "Company": "string",
+          "UserTypeId": "integer(int32)",
+          "MemberId": "integer(int32)",
+          "CustomerGroupId": "integer(int32)",
+          "Address": "string",
+          "Address2": "string",
+          "Address3": "string",
+          "DoorCode": "string",
+          "PersonalId": "string",
+          "Birthyear": "string",
+          "Zip": "string",
+          "City": "string",
+          "CareOf": "string",
+          "Country": "string",
+          "State": "string",
+          "CountryId": "integer(int32)",
+          "GenderType": "0|1|2",
+          "Password": "string",
+          "Newsletter": "boolean",
+          "MetaData": "string"
+        }
+      },
+      "User.Models.UserProfileQuery": {
+        "fields": {
+          "CreatedBefore": "string(date-time)",
+          "CreatedAfter": "string(date-time)",
+          "UpdatedAfter": "string(date-time)",
+          "IncludeInactive": "boolean",
+          "BatchId": "string(uuid)",
+          "UserId": "integer(int32)",
+          "Email": "string"
+        }
+      },
+      "User.Models.Read.BalanceType": {
+        "fields": {
+          "Name": "string"
+        }
+      },
+      "User.Models.Read.Balance": {
+        "fields": {
+          "CurrentBalance": "number(double)",
+          "Currency": "string"
+        }
+      },
+      "User.Models.Read.BalanceTransaction": {
+        "fields": {
+          "BalanceType": "string",
+          "Currency": "string",
+          "ExternalId": "integer(int32)",
+          "Text": "string",
+          "Amount": "number(double)",
+          "CreatedOn": "string(date-time)"
+        }
+      },
+      "User.Models.Write.BalanceTransaction": {
+        "fields": {
+          "BalanceType": "string",
+          "Currency": "string",
+          "ExternalId": "integer(int32)",
+          "Text": "string",
+          "Amount": "number(double)"
+        }
+      }
+    }
+  },
+  "Variant": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Variant/Labels",
+        "summary": "Get variant labels",
+        "responseSchema": "Envelope-List-System.String"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Variant/Label",
+        "summary": "Add a new variant label",
+        "requestSchema": "Variant.Models.Write.VariantLabel",
+        "responseSchema": "Envelope-List-System.String"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Variant/Label/{oldLabel}",
+        "summary": "Update an existing variant label",
+        "requestSchema": "Variant.Models.Write.VariantLabel",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Variant/Label/{label}",
+        "summary": "Delete a variant label",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Variant/{productId}/VariantGroup",
+        "summary": "Get variant group (product id)",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Variant/{productId}/VariantGroup",
+        "summary": "Create variant group (product)",
+        "requestSchema": "Variant.Models.Write.VariantGroup",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Variant/{productId}/VariantGroup",
+        "summary": "Delete variant group (product id)",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Variant/{productId1}/{productId2}",
+        "summary": "Add product to variant group (product)",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Variant/{productId}",
+        "summary": "Update variant",
+        "responseSchema": "Variant.Models.Read.Variant"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Variant/{productId}",
+        "summary": "Remove product from variant group",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "GET",
+        "path": "/API/VariantGroup/{groupId}",
+        "summary": "Get variant group (group id)",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/VariantGroup/{groupId}",
+        "summary": "Update variant group",
+        "requestSchema": "Variant.Models.Write.VariantGroup",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/VariantGroup/{groupId}",
+        "summary": "Delete variant group (group id)",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/VariantGroup",
+        "summary": "Create variant group",
+        "requestSchema": "Variant.Models.Write.VariantGroup",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/VariantGroup/{groupId}/{productId}",
+        "summary": "Add product to variant group",
+        "responseSchema": "Variant.Models.Read.VariantGroup"
+      }
+    ],
+    "schemas": {
+      "Variant.Models.Write.VariantLabel": {
+        "fields": {
+          "Label": "string"
+        }
+      },
+      "Variant.Models.Read.VariantGroup": {
+        "fields": {
+          "GroupId": "integer(int32)",
+          "Name": "string",
+          "CollapseInLists": "boolean",
+          "MainProductId": "integer(int32)",
+          "ProductIds": "array",
+          "Products": "Product.Models.Read.Product[]"
+        }
+      },
+      "Variant.Models.Write.VariantGroup": {
+        "fields": {
+          "Name": "string",
+          "CollapseInLists": "boolean",
+          "VariantLabels": "array",
+          "Products": "Product.Models.Write.Product[]"
+        }
+      },
+      "Variant.Models.Read.Variant": {
+        "fields": {
+          "ProductId": "integer(int32)",
+          "GroupId": "integer(int32)",
+          "Label": "string",
+          "Value": "string"
+        }
+      },
+      "Variant.Models.Write.Variant": {
+        "fields": {
+          "Label": "string",
+          "Value": "string"
+        }
+      }
+    }
+  },
+  "Webhook": {
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/API/Webhook/{webhookId}",
+        "summary": "Get webhook",
+        "responseSchema": "Geins.WebhookItem"
+      },
+      {
+        "method": "PUT",
+        "path": "/API/Webhook/{webhookId}",
+        "summary": "Update webhook",
+        "requestSchema": "Webhook.Models.RestWebhook",
+        "responseSchema": "Envelope-Nullable-System.Boolean"
+      },
+      {
+        "method": "DELETE",
+        "path": "/API/Webhook/{webhookId}",
+        "summary": "Delete webhook",
+        "responseSchema": "BaseEnvelope"
+      },
+      {
+        "method": "POST",
+        "path": "/API/Webhook",
+        "summary": "Create webhook",
+        "requestSchema": "Webhook.Models.RestWebhook",
+        "responseSchema": "Envelope-Nullable-Guid"
+      },
+      {
+        "method": "GET",
+        "path": "/API/Webhook/List",
+        "summary": "List webhooks",
+        "responseSchema": "Geins.WebhookItem"
+      }
+    ],
+    "schemas": {
+      "Geins.WebhookItem": {
+        "fields": {
+          "Id": "string(uuid)",
+          "Entity": "0|1|2|3|4|5|6|7|8|9|10",
+          "Name": "string",
+          "Description": "string",
+          "Actions": "string",
+          "Method": "string",
+          "Url": "string",
+          "Body": "string",
+          "Headers": "string",
+          "Retry": "boolean"
+        }
+      },
+      "Webhook.Models.RestWebhook": {
+        "fields": {
+          "Entity": "0|1|2|3|4|5|6|7|8|9|10",
+          "Name": "string",
+          "Description": "string",
+          "Actions": "string",
+          "Method": "string",
+          "Url": "string",
+          "Body": "string",
+          "Headers": "string",
+          "Retry": "boolean"
+        }
+      }
+    }
+  }
+}

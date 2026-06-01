@@ -9,6 +9,9 @@ import {
   buildContextPromptSection,
   loadKnowledge,
   buildKnowledgePromptSection,
+  loadManifestCache,
+  buildManifestPromptSection,
+  buildApiReferencePromptSection,
   addFact,
   extractMemoryBlocks,
 } from '../memory/index.ts';
@@ -142,13 +145,21 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
   const userMsgText = userMessage ? `User: ${userMessage}` : '';
   const userMsgTokens = estimateTokens(userMsgText);
 
-  const [ctx, kb] = await Promise.all([loadContext(), loadKnowledge()]);
+  const [ctx, kb, manifestCache] = await Promise.all([loadContext(), loadKnowledge(), loadManifestCache()]);
   const contextSection = buildContextPromptSection(ctx);
-  const knowledgeSection = buildKnowledgePromptSection(kb);
+  const knowledgeSection = buildKnowledgePromptSection(kb, {
+    contextWindow: option?.contextWindow,
+  });
+  const manifestSection = buildManifestPromptSection(manifestCache);
   const contextTokens = estimateTokens(contextSection);
   const knowledgeTokens = estimateTokens(knowledgeSection);
+  const manifestTokens = estimateTokens(manifestSection);
 
-  const historyBudget = maxTokens - systemTokens - userMsgTokens - contextTokens - knowledgeTokens;
+  const apiRefBudget = Math.min(4000, Math.floor(maxTokens * 0.15));
+  const apiRefSection = buildApiReferencePromptSection(userMessage, apiRefBudget);
+  const apiRefTokens = estimateTokens(apiRefSection);
+
+  const historyBudget = maxTokens - systemTokens - userMsgTokens - contextTokens - knowledgeTokens - manifestTokens - apiRefTokens;
   const recentMessages = await loadRecentMessages(Math.max(0, historyBudget));
   const historyParts = recentMessages.map(
     msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
@@ -156,6 +167,8 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
 
   const parts = [SYSTEM_CONTEXT];
   if (knowledgeSection) parts.push(knowledgeSection);
+  if (manifestSection) parts.push(manifestSection);
+  if (apiRefSection) parts.push(apiRefSection);
   if (contextSection) parts.push(contextSection);
   parts.push(...historyParts);
   if (userMsgText) parts.push(userMsgText);

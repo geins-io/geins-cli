@@ -43,7 +43,38 @@ export interface SessionIndexEntry {
   sizeBytes: number;
 }
 
+// --- Knowledge v2 ---
+
 export interface KnowledgeBase {
+  version: 2;
+  entities: EntityRecord[];
+  patterns: PatternRecord[];
+  preferences: Record<string, string>;
+  updatedAt: number;
+}
+
+export interface EntityRecord {
+  id: string;
+  type: 'workflow' | 'product' | 'variable' | 'endpoint';
+  name: string;
+  externalId?: string;
+  attributes: Record<string, string>;
+  lastSeenAt: number;
+  seenCount: number;
+}
+
+export interface PatternRecord {
+  id: string;
+  type: 'workflow-pattern' | 'api-pattern' | 'naming' | 'common-action';
+  description: string;
+  confidence: number;
+  examples: string[];
+  createdAt: number;
+  lastUsedAt: number;
+}
+
+// Legacy v1 types for migration
+export interface KnowledgeBaseV1 {
   version: 1;
   facts: KnowledgeFact[];
   preferences: Record<string, string>;
@@ -58,4 +89,12 @@ export interface KnowledgeFact {
   createdAt: number;
   lastUsedAt: number;
   source: string;
+}
+
+export interface ManifestCache {
+  data: unknown;
+  cachedAt: number;
+  actionNames: string[];
+  triggerTypes: string[];
+  nodeTypes: string[];
 }

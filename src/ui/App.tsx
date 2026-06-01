@@ -24,10 +24,12 @@ import {
   logEntry,
   endSession,
   trackWorkflow,
+  trackWorkflowList,
   searchSessions,
   loadKnowledge,
   clearKnowledge,
   clearHistory,
+  cacheManifest,
 } from '../memory/index.ts';
 import {
   listWorkflows,
@@ -369,6 +371,7 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const data = await listWorkflows();
               appState.setLiveComponent(null);
+              trackWorkflowList(data.items as unknown as Array<Record<string, unknown>>);
               for (const wf of data.items) {
                 const status = wf.enabled ? '●' : '○';
                 logText(`  ${status} ${wf.name}`);
@@ -389,7 +392,7 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const wfData = await getWorkflow(id);
               appState.setLiveComponent(null);
-              trackWorkflow(id);
+              trackWorkflow(id, wfData as Record<string, unknown>);
               logText(`  ${JSON.stringify(wfData, null, 2)}`);
               break;
             }
@@ -497,6 +500,7 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const manifest = await getManifest();
               appState.setLiveComponent(null);
+              cacheManifest(manifest);
               logText(`  ${JSON.stringify(manifest, null, 2)}`);
               break;
             }
@@ -730,15 +734,24 @@ export function App({ version = VERSION }: { version?: string }) {
             break;
           }
           const kb = await loadKnowledge();
-          if (kb.facts.length === 0 && Object.keys(kb.preferences).length === 0) {
+          if (kb.entities.length === 0 && kb.patterns.length === 0 && Object.keys(kb.preferences).length === 0) {
             logDim('  No learned knowledge yet');
             break;
           }
-          if (kb.facts.length > 0) {
-            logText('  Learned facts:');
-            for (const f of kb.facts) {
-              const conf = Math.round(f.confidence * 100);
-              logText(`    [${f.category}] ${f.content} (${conf}%)`);
+          if (kb.entities.length > 0) {
+            logText(`  Entities (${kb.entities.length}):`);
+            for (const e of kb.entities.slice(0, 15)) {
+              const attrs = Object.values(e.attributes).filter(Boolean).join(', ');
+              const detail = attrs ? ` (${attrs})` : '';
+              logText(`    [${e.type}] ${e.name}${detail}`);
+            }
+            if (kb.entities.length > 15) logDim(`    ... and ${kb.entities.length - 15} more`);
+          }
+          if (kb.patterns.length > 0) {
+            logText(`  Patterns (${kb.patterns.length}):`);
+            for (const p of kb.patterns.slice(0, 10)) {
+              const conf = Math.round(p.confidence * 100);
+              logText(`    [${p.type}] ${p.description} (${conf}%)`);
             }
           }
           if (Object.keys(kb.preferences).length > 0) {
