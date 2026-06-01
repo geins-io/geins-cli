@@ -15,6 +15,7 @@ const COMMANDS: Record<string, string> = {
   new: 'New conversation',
   api: 'Raw API request',
   management: 'Management API',
+  output: 'Dump responses to a folder',
   theme: 'Switch dark/light mode',
   clear: 'Clear the screen',
   exit: 'Exit the CLI',
@@ -26,6 +27,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   product: ['get', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
+  output: ['status', 'off'],
   copilot: ['set'],
 };
 
@@ -62,6 +64,12 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
   copilot: {
     set: 'claude | codex | gemini | ollama | lmstudio',
   },
+};
+
+// Positional-argument hint shown before the subcommand list for commands whose
+// bare form takes a value (e.g. `/output <path>`).
+const BARE_HINTS: Record<string, string> = {
+  output: '<path>',
 };
 
 const COMMAND_NAMES = Object.keys(COMMANDS);
@@ -167,7 +175,10 @@ export function ChatInput({ disabled = false, copilotActive = false, copilotProv
     const subs = SUBCOMMANDS[cmd];
     if (!subs) return null;
     const typed = parts[1];
-    if (!typed) return subs.join(' | ');
+    if (!typed) {
+      const bare = BARE_HINTS[cmd];
+      return (bare ? `${bare} | ` : '') + subs.join(' | ');
+    }
     const typedLower = typed.toLowerCase();
     const exactMatch = subs.find(s => s.toLowerCase() === typedLower);
     if (exactMatch) {

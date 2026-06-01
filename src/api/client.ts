@@ -2,6 +2,7 @@ import { getApiUrl } from '../config/env.ts';
 import { refresh } from '../auth/login.ts';
 import { loadSession, saveSession, expiresSoon, parseJwtExp, type StoredSession } from '../auth/session.ts';
 import { ApiError, notLoggedIn } from './errors.ts';
+import { recordResponse } from '../output/sink.ts';
 
 export interface RequestOptions {
   method?: string;
@@ -75,10 +76,22 @@ export async function request<T = unknown>(path: string, options?: RequestOption
       body: options?.body ? JSON.stringify(options.body) : undefined,
     });
 
-    if (!retry.ok) throw await ApiError.fromResponse(retry, method, path);
-    return retry.json() as Promise<T>;
+    if (!retry.ok) {
+      const err = await ApiError.fromResponse(retry, method, path);
+      await recordResponse({ method, path, status: retry.status, error: err.body || err.message });
+      throw err;
+    }
+    const retryData = (await retry.json()) as T;
+    await recordResponse({ method, path, status: retry.status, data: retryData });
+    return retryData;
   }
 
-  if (!res.ok) throw await ApiError.fromResponse(res, method, path);
-  return res.json() as Promise<T>;
+  if (!res.ok) {
+    const err = await ApiError.fromResponse(res, method, path);
+    await recordResponse({ method, path, status: res.status, error: err.body || err.message });
+    throw err;
+  }
+  const data = (await res.json()) as T;
+  await recordResponse({ method, path, status: res.status, data });
+  return data;
 }

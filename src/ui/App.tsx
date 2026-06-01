@@ -10,8 +10,9 @@ import { SelectApiKey } from './SelectApiKey.tsx';
 import { SelectAccount } from './SelectAccount.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
-import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from '../config/store.ts';
+import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, loadConfig, saveConfig, type ApiCredentials } from '../config/store.ts';
 import { resetCredentialsCache } from '../api/live-client.ts';
+import { setOutputDir, getOutputDir } from '../output/sink.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request } from '../api/client.ts';
@@ -350,6 +351,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /product    Product commands        /product get <id>');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /management Management API           /management GET /API/Market/List');
+          logText('  /output     Dump responses to folder   /output ./out | /output off');
           logText('  /copilot    Toggle AI copilot mode  /copilot set');
           if (appState.copilotActive) {
             logText('  /new        New conversation         Clear copilot history');
@@ -808,6 +810,30 @@ export function App({ version = VERSION }: { version?: string }) {
           const data = await named.run(args.slice(1));
           appState.setLiveComponent(null);
           logText(`  ${JSON.stringify(data, null, 2)}`);
+          break;
+        }
+
+        case 'output': {
+          const sub = args[0];
+          if (!sub || sub.toLowerCase() === 'status') {
+            const dir = await getOutputDir();
+            if (dir) logText(`  Output folder: ${dir}`); else logDim('  Output folder: disabled');
+            break;
+          }
+          if (['off', 'clear', 'none', 'disable'].includes(sub.toLowerCase())) {
+            const config = await loadConfig();
+            delete config.outputDir;
+            await saveConfig(config);
+            setOutputDir(null);
+            logSuccess('  ✓ Output folder disabled.');
+            break;
+          }
+          const config = await loadConfig();
+          config.outputDir = sub;
+          await saveConfig(config);
+          setOutputDir(sub);
+          const resolved = await getOutputDir();
+          logSuccess(`  ✓ Output folder set: ${resolved}`);
           break;
         }
 

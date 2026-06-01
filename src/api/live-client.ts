@@ -1,6 +1,7 @@
 import { getMgmtApiUrl, getMerchantApiUrl } from '../config/env.ts';
 import { loadCredentials, loadCredentialsByName, type ApiCredentials } from '../config/store.ts';
 import { ApiError, noCredentials } from './errors.ts';
+import { recordResponse } from '../output/sink.ts';
 
 // Live Geins APIs, authenticated with API User credentials (see ApiCredentials):
 //   - Management API (REST):    Basic Auth + X-ApiKey
@@ -80,10 +81,16 @@ export async function mgmtRequest<T = unknown>(
     body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
 
-  if (!res.ok) throw await ApiError.fromResponse(res, method, apiPath);
+  if (!res.ok) {
+    const err = await ApiError.fromResponse(res, method, apiPath);
+    await recordResponse({ method, path: apiPath, status: res.status, error: err.body || err.message });
+    throw err;
+  }
 
   const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  const data = (text ? JSON.parse(text) : undefined) as T;
+  await recordResponse({ method, path: apiPath, status: res.status, data });
+  return data;
 }
 
 interface GraphQLResponse<T> {
@@ -108,13 +115,19 @@ export async function merchantQuery<T = unknown>(
     body: JSON.stringify({ query, variables }),
   });
 
-  if (!res.ok) throw await ApiError.fromResponse(res, 'POST', '/graphql');
+  if (!res.ok) {
+    const err = await ApiError.fromResponse(res, 'POST', '/graphql');
+    await recordResponse({ method: 'POST', path: '/graphql', status: res.status, error: err.body || err.message });
+    throw err;
+  }
 
   const json = (await res.json()) as GraphQLResponse<T>;
   if (json.errors?.length) {
     const message = json.errors.map((e) => e.message).join('; ');
+    await recordResponse({ method: 'POST', path: '/graphql', status: 200, error: message });
     throw new ApiError(200, 'POST', '/graphql', message);
   }
+  await recordResponse({ method: 'POST', path: '/graphql', status: 200, data: json.data });
   return json.data as T;
 }
 

@@ -1,7 +1,8 @@
 import React from 'react';
 import { render } from 'ink';
 import { App } from './ui/App.tsx';
-import { loadConfig, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from './config/store.ts';
+import { loadConfig, saveConfig, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from './config/store.ts';
+import { setOutputDir, getOutputDir } from './output/sink.ts';
 import { request } from './api/client.ts';
 import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
@@ -52,9 +53,11 @@ export async function run(argv: string[]): Promise<void> {
 }
 
 async function runDirect(rawArgs: string[]): Promise<void> {
-  // Global --account / --profile override (selects which live-API account to use).
-  // Stripped out before command parsing so it can appear anywhere on the line.
+  // Global flags stripped before command parsing so they can appear anywhere:
+  //   --account/--profile <name>  selects the live-API account
+  //   --out <dir>                 dumps responses + a request log to <dir>
   let accountOverride = process.env['GEINS_ACCOUNT'];
+  let outOverride: string | undefined;
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
     if ((rawArgs[i] === '--account' || rawArgs[i] === '--profile') && rawArgs[i + 1]) {
@@ -62,9 +65,15 @@ async function runDirect(rawArgs: string[]): Promise<void> {
       i++;
       continue;
     }
+    if (rawArgs[i] === '--out' && rawArgs[i + 1]) {
+      outOverride = rawArgs[i + 1];
+      i++;
+      continue;
+    }
     args.push(rawArgs[i]!);
   }
   if (accountOverride) setProfileOverride(accountOverride);
+  if (outOverride) setOutputDir(outOverride);
 
   if (args[0] === '--help' || args[0] === 'help') {
     console.log(`geins v${VERSION}`);
@@ -79,9 +88,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
     console.log('  product    Product commands (get) — uses Management API');
     console.log('  management Call the Management API (raw + named methods)');
-    console.log('  api       Raw API request\n');
+    console.log('  api       Raw API request');
+    console.log('  output    Set/show the folder where responses + logs are dumped\n');
     console.log('Global flags:');
     console.log('  --account <name>   Use a specific live-API account (or set GEINS_ACCOUNT)');
+    console.log('  --out <dir>        Dump responses + request log to <dir> (or set GEINS_OUTPUT_DIR)');
     console.log('  --json      Force JSON output');
     console.log('  --help      Show help');
     console.log('  --version   Show version');
@@ -514,6 +525,29 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         }
         const data = await named.run(commandArgs.slice(1));
         console.log(JSON.stringify(data, null, 2));
+        break;
+      }
+      case 'output': {
+        const sub = commandArgs[0];
+        if (!sub || sub.toLowerCase() === 'status') {
+          const dir = await getOutputDir();
+          console.log(dir ? `Output folder: ${dir}` : 'Output folder: (disabled)');
+          break;
+        }
+        if (['off', 'clear', 'none', 'disable'].includes(sub.toLowerCase())) {
+          const config = await loadConfig();
+          delete config.outputDir;
+          await saveConfig(config);
+          setOutputDir(null);
+          console.log('✓ Output folder disabled.');
+          break;
+        }
+        const config = await loadConfig();
+        config.outputDir = sub;
+        await saveConfig(config);
+        setOutputDir(sub);
+        const resolved = await getOutputDir();
+        console.log(`✓ Output folder set: ${resolved}`);
         break;
       }
       default:

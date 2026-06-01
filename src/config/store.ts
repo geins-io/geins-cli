@@ -17,6 +17,8 @@ export interface GeinsConfig {
   apiUrl?: string;
   defaultAccount?: string;
   outputFormat?: 'table' | 'json';
+  /** Folder where API responses and a request log are written. Unset = disabled. */
+  outputDir?: string;
   theme?: 'dark' | 'light';
   copilot?: CopilotConfig;
 }
