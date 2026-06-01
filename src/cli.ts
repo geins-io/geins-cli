@@ -9,6 +9,7 @@ import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
 import { getProduct, productName } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
+import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -76,7 +77,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  whoami    Show current user and account');
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
-    console.log('  product    Product commands (get) — uses live Management API');
+    console.log('  product    Product commands (get) — uses Management API');
+    console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request\n');
     console.log('Global flags:');
     console.log('  --account <name>   Use a specific live-API account (or set GEINS_ACCOUNT)');
@@ -469,6 +471,48 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         }
         const apiPath = path.startsWith('/') ? path : `/${path}`;
         const data = await request(apiPath, { method, body });
+        console.log(JSON.stringify(data, null, 2));
+        break;
+      }
+      case 'management': {
+        const sub = commandArgs[0] ?? '';
+        const methodNames = Object.keys(managementMethods);
+
+        if (!sub || sub.toLowerCase() === 'help') {
+          console.log("Usage: geins management <METHOD> <path> [--body '<json>']   Raw Management API call");
+          for (const name of methodNames) {
+            const m = managementMethods[name]!;
+            console.log(`       geins management ${name}${m.usage ? ` ${m.usage}` : ''}    ${m.description}`);
+          }
+          break;
+        }
+
+        // Raw passthrough: geins management GET /API/Market/List
+        if (isHttpMethod(sub)) {
+          const method = sub.toUpperCase();
+          const path = commandArgs[1];
+          if (!path) {
+            console.error('Usage: geins management <METHOD> <path>');
+            process.exit(1);
+          }
+          let body: unknown;
+          const bodyIdx = commandArgs.indexOf('--body');
+          if (bodyIdx !== -1 && commandArgs[bodyIdx + 1]) {
+            body = JSON.parse(commandArgs[bodyIdx + 1]!);
+          }
+          const data = await managementRequest(method, path, body);
+          console.log(JSON.stringify(data, null, 2));
+          break;
+        }
+
+        // Named method
+        const named = managementMethods[sub.toLowerCase()];
+        if (!named) {
+          console.error(`Unknown method: management ${sub}`);
+          console.error('Run geins management help for available methods');
+          process.exit(1);
+        }
+        const data = await named.run(commandArgs.slice(1));
         console.log(JSON.stringify(data, null, 2));
         break;
       }

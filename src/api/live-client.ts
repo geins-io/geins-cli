@@ -56,7 +56,7 @@ function mgmtHeaders(creds: ApiCredentials): Record<string, string> {
 }
 
 /**
- * Call the live Management API. Pass `creds` to use credentials that are not yet
+ * Call the Management API. Pass `creds` to use credentials that are not yet
  * stored (e.g. during validation); otherwise the stored credentials are used.
  */
 export async function mgmtRequest<T = unknown>(

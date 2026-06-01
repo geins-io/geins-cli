@@ -5,7 +5,7 @@ export interface LocalizableContent {
   Content: string;
 }
 
-/** A product as returned by the live Management API (Product.Models.Read.Product). */
+/** A product as returned by the Management API (Product.Models.Read.Product). */
 export interface Product {
   ProductId: number;
   ArticleNumber: string;

@@ -49,6 +49,7 @@ import {
   saveVariable,
 } from '../commands/workflows.ts';
 import { getProduct, productName } from '../commands/products.ts';
+import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
 const VERSION = '0.1.0';
 
@@ -348,6 +349,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id>');
           logText('  /api        Raw API request         /api GET /products');
+          logText('  /management Management API           /management GET /API/Market/List');
           logText('  /copilot    Toggle AI copilot mode  /copilot set');
           if (appState.copilotActive) {
             logText('  /new        New conversation         Clear copilot history');
@@ -742,6 +744,68 @@ export function App({ version = VERSION }: { version?: string }) {
           );
           const apiPath = path.startsWith('/') ? path : `/${path}`;
           const data = await request(apiPath, { method, body });
+          appState.setLiveComponent(null);
+          logText(`  ${JSON.stringify(data, null, 2)}`);
+          break;
+        }
+
+        case 'management': {
+          const sub = args[0] ?? '';
+          const methodNames = Object.keys(managementMethods);
+
+          if (!sub || sub.toLowerCase() === 'help') {
+            logText('');
+            logText("  /management <METHOD> <path> [--body '<json>']   Raw Management API call");
+            if (methodNames.length > 0) {
+              logText('');
+              for (const name of methodNames) {
+                const m = managementMethods[name]!;
+                logText(`  /management ${name}${m.usage ? ` ${m.usage}` : ''}    ${m.description}`);
+              }
+            }
+            logText('');
+            break;
+          }
+
+          // Raw passthrough: /management GET /API/Market/List
+          if (isHttpMethod(sub)) {
+            const method = sub.toUpperCase();
+            const path = args[1];
+            if (!path) { logText('  Usage: /management <METHOD> <path>'); break; }
+            const bodyIdx = args.indexOf('--body');
+            let body: unknown;
+            if (bodyIdx !== -1 && args[bodyIdx + 1]) {
+              try { body = JSON.parse(args[bodyIdx + 1]!); } catch {
+                logError('  Invalid JSON in --body');
+                break;
+              }
+            }
+            appState.setLiveComponent(
+              <Box key="mgmt-spinner" gap={1} paddingX={1}>
+                <Spinner type="dots" />
+                <Text dimColor>Requesting {method} {path}...</Text>
+              </Box>,
+            );
+            const data = await managementRequest(method, path, body);
+            appState.setLiveComponent(null);
+            logText(`  ${JSON.stringify(data, null, 2)}`);
+            break;
+          }
+
+          // Named method
+          const named = managementMethods[sub.toLowerCase()];
+          if (!named) {
+            logError(`  Unknown method: ${sub}`);
+            logDim('  Type /management help for available methods');
+            break;
+          }
+          appState.setLiveComponent(
+            <Box key="mgmt-spinner" gap={1} paddingX={1}>
+              <Spinner type="dots" />
+              <Text dimColor>Calling {sub}...</Text>
+            </Box>,
+          );
+          const data = await named.run(args.slice(1));
           appState.setLiveComponent(null);
           logText(`  ${JSON.stringify(data, null, 2)}`);
           break;

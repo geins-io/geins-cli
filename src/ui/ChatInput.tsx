@@ -14,6 +14,7 @@ const COMMANDS: Record<string, string> = {
   provider: 'Switch copilot provider',
   new: 'New conversation',
   api: 'Raw API request',
+  management: 'Management API',
   theme: 'Switch dark/light mode',
   clear: 'Clear the screen',
   exit: 'Exit the CLI',
@@ -24,6 +25,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
   product: ['get', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
+  management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   copilot: ['set'],
 };
 
@@ -50,6 +52,12 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     POST: '<path> [--body \'<json>\']',
     PUT: '<path> [--body \'<json>\']',
     DELETE: '<path>',
+  },
+  management: {
+    GET: '/API/...',
+    POST: '/API/... [--body \'<json>\']',
+    PUT: '/API/... [--body \'<json>\']',
+    DELETE: '/API/...',
   },
   copilot: {
     set: 'claude | codex | gemini | ollama | lmstudio',
