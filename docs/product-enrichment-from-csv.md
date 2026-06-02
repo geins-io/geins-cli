@@ -168,45 +168,67 @@ Verify: `geins product images <GeinsId> --account …`.
 
 ## 6. Variant group (products with the same `leafId`)
 
-Group the leaf's products as variants of each other; **dimensions = the populated spec
-columns** after `VARIANTS`.
+Group the leaf's products as variants of each other using **one dimension named `Variant`**,
+whose value is the **slash-joined populated spec values** (in column order). Do **not** create
+one axis per spec column — a single concatenated `Variant` value keeps the storefront to one
+selectable axis.
 
-**Step 6a — register the labels first** (no auto-registration; values/labels with spaces or
-parentheses are fine here):
+> Example value: `100 / 0,5 / 1-4 / 16x4x0,10`
+
+**Preflight — are the products already in a variant group?**
 
 ```bash
-A="--account prod-elproman"
-bun run src/bin.ts product variants labels add "Beskrivning" $A
-bun run src/bin.ts product variants labels add "För max area (mm2)" $A
-bun run src/bin.ts product variants labels add "Bredd (mm)" $A
-bun run src/bin.ts product variants labels add "Delning (mm)" $A
-bun run src/bin.ts product variants labels add "Höjd (mm)" $A
+bun run src/bin.ts product variants <GeinsId> --account prod-elproman
 ```
 
-**Step 6b — build a JSON body and create.** Use the **JSON body, not the `--product id:L=V`
-flags** — your values contain commas (`4,0`) and labels contain spaces/parentheses, which
-break the flag delimiters.
+A product belongs to **at most one** variant group, so the path depends on the answer:
+
+### Case A — not grouped yet
+
+Register the `Variant` label once (if not already registered), then create with a JSON body
+(use the body, **not** the `--product id:L=V` flags — values contain `/`, commas, spaces):
 
 ```bash
+bun run src/bin.ts product variants labels add "Variant" --account prod-elproman  # idempotent-ish; skip if present
+
 python3 - "$CSV" > /tmp/variant-body.json <<'PY'
 import csv, sys, json
 rows = list(csv.reader(open(sys.argv[1], encoding='utf-8-sig'), delimiter=';'))
 hdr = rows[0]; idx = {n:i for i,n in enumerate(hdr)}
-dims = ["Beskrivning","För max area (mm2)","Bredd (mm)","Delning (mm)","Höjd (mm)"]
+dims = ["Beskrivning","För max area (mm2)","Bredd (mm)","Delning (mm)","Höjd (mm)"]  # the leaf's populated spec cols
 products=[]
 for r in rows[1:]:
     gid=r[idx["Geins_GeinsId"]].strip()
     if not gid: continue
-    d={c:r[idx[c]].strip() for c in dims if r[idx[c]].strip()}
-    products.append({"id":int(gid),"dimensions":d})
-print(json.dumps({"name":"Kopplingsplintar","labels":dims,"products":products}, ensure_ascii=False, indent=2))
+    vals=[r[idx[c]].strip() for c in dims if r[idx[c]].strip()]
+    products.append({"id":int(gid),"dimensions":{"Variant":" / ".join(vals)}})
+print(json.dumps({"name":"<leafName>","labels":["Variant"],"products":products}, ensure_ascii=False, indent=2))
 PY
 
 bun run src/bin.ts product variants create --file /tmp/variant-body.json --account prod-elproman
 ```
 
-- The first-attached product becomes the group **main**; the main cannot be reassigned via
-  the Management API.
+### Case B — already grouped (overwrite each member's `Variant` value in place)
+
+If the group already uses a `Variant` label (a common case), just set the new value per
+product — no rebuild needed:
+
+```bash
+bun run src/bin.ts product variants set <GeinsId> "Variant=100 / 0,5 / 1-4 / 16x4x0,10" --account prod-elproman
+```
+
+### Case C — grouped with the *wrong* dimensions (rebuild)
+
+If the group uses different/multiple labels, delete it and recreate via Case A:
+
+```bash
+bun run src/bin.ts product variants delete <groupId> --account prod-elproman
+# then Case A
+```
+
+Notes:
+- Deleting + recreating yields a **new group id** and resets **main** to the first-attached
+  product (main can't be set via the Management API).
 - Verify: `geins product variants <GeinsId> --account …`.
 
 ---
@@ -278,22 +300,31 @@ bun run src/bin.ts product parameters batch update --file /tmp/param-batch.json 
   `--add` (POST) to auto-suffix, and read the `stored` name back.
 - **Comma decimals** (`4,0`) are strings, not floats → variant values and parameters must be
   String (`--type 1`); don't try Float.
-- **Variant labels must be pre-registered**, and **use the JSON body** for create (flag
-  syntax breaks on commas/spaces in values/labels).
-- **Variant main product** = first attached; can't be changed via the Management API.
+- **Variant model = one `Variant` axis** with concatenated values; labels must be
+  pre-registered, and **use the JSON body** for create (flag syntax breaks on `/`/commas/spaces).
+- **Products may already be in a variant group** (a source export often pre-groups them) — a
+  product can only be in one group. Use `variants set` to overwrite a member's value in place,
+  or `variants delete` + recreate. Variant **main** = first attached; can't be set via the API.
+- **Same `parentCategoryName` across leaves → reuse the parameter group** (don't recreate it).
+  Each leaf's dimensions become new parameter *defs* inside that shared group.
+- **Already-enriched products** may already have a primary image — `images add` then adds the
+  CSV image as a **secondary** image (it does not replace the primary).
+- **Writes are flaky (transient HTTP 400)** on busy accounts: the same `text set` / `assign` /
+  `variants set` may 400 once and succeed on retry. **Retry each write a few times** (a small
+  bash `for` loop with `if bun … ; then break; fi` works well).
 - **Shell**: in zsh, don't stuff a command into a variable (`$B`) — it won't word-split; and
-  multi-command `for` loops can trip the sandbox. Run commands sequentially, or drive the
-  loop from a script/Python.
+  inline `for` loops in the eval context can trip the sandbox. Prefer a **bash script file**
+  (`bash script.sh`) for loops/retries, or run commands sequentially.
 
 ---
 
 ## 9. Re-runs / idempotency
 
-- `text set`, `images add` (PUT), `parameters batch update`, `categories assign` are
-  effectively idempotent (re-applying the same value is a no-op/replace).
+- `text set`, `images add` (PUT), `parameters batch update`, `categories assign`, and
+  `variants set` are effectively idempotent (re-applying the same value is a no-op/replace).
 - `categories create`, `parameters groups/defs create`, `variants labels add`, and
   `variants create` are **not** idempotent — re-running creates duplicates. Capture the ids
-  from the first run and reuse them, or delete the duplicates.
+  from the first run and reuse them, or delete the duplicates (`variants delete <groupId>`).
 
 ---
 
@@ -305,7 +336,7 @@ bun run src/bin.ts product parameters batch update --file /tmp/param-batch.json 
 | Category | `product categories create --name "sv:<Leaf>" --parent <pid> --desc "sv:<Text>"` → `update <cat> --active` → `categories assign <id> <cat>` |
 | Image (upload) | `product images add <id> <url> --json` (capture `stored`) |
 | Image (reuse) | `product images add-existing <id> <stored>` |
-| Variant group | register labels → `product variants create --file body.json` |
+| Variant group | one `Variant` axis = slash-joined spec values. New: `variants create --file body.json`; existing: `variants set <id> "Variant=…"`; rebuild: `variants delete <groupId>` then create |
 | Parameters | `parameters groups create` → `parameters defs create --type 1` → `parameters batch update --file batch.json` |
 
 All commands take `--account <name>` and (optionally) `--json`.
