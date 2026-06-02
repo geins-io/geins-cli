@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, updateProduct, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
@@ -72,6 +72,7 @@ const PRODUCT_HELP = [
   '  text <id> [--idtype <0-3>] [--json]       List a product\'s localized texts (Names/ShortTexts/LongTexts/TechTexts)',
   '  text set <id> <name|shorttext|longtext|techtext> <locale>:<text>...  [--idtype <0-3>]   Set/merge localized text (one locale, keeps the rest)',
   '  categories assign <productId> <categoryId> [--idtype <0-3>]     Assign a category to a product',
+  '  categories set-main <productId> <categoryId> [--idtype <0-3>]   Assign (if needed) and set as the product\'s main category',
   '  categories unassign <productId> <categoryId> [--idtype <0-3>]   Remove a category from a product (preserves main)',
   '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
   '  relations <id> [--json]                   List a product\'s related products',
@@ -1089,6 +1090,16 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               if (!productId || Number.isNaN(categoryId)) { console.error('Usage: geins product categories assign <productId> <categoryId> [--idtype <0-3>]'); process.exit(1); }
               await assignProductCategory(productId, categoryId, { idType: idTypeFor() });
               console.log(`✓ Assigned category ${categoryId} to product ${productId}`);
+              break;
+            }
+            if (action === 'set-main' || action === 'main') {
+              const productId = subArgs[1];
+              const categoryId = Number(subArgs[2]);
+              if (!productId || Number.isNaN(categoryId)) { console.error('Usage: geins product categories set-main <productId> <categoryId> [--idtype <0-3>]'); process.exit(1); }
+              // Assign first (no-op if already assigned), then set it as the main category.
+              await assignProductCategory(productId, categoryId, { idType: idTypeFor() });
+              await updateProduct(productId, { MainCategoryId: categoryId }, { idType: idTypeFor() });
+              console.log(`✓ Set category ${categoryId} as main category for product ${productId}`);
               break;
             }
             if (action === 'unassign' || action === 'remove') {
