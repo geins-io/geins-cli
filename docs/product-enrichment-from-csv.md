@@ -176,12 +176,30 @@ Verify: `geins product images <GeinsId> --account …`.
 
 ## 6. Variant group (products with the same `leafId`)
 
-Group the leaf's products as variants of each other using **one dimension named `Variant`**,
-whose value is the **slash-joined populated spec values** (in column order). Do **not** create
-one axis per spec column — a single concatenated `Variant` value keeps the storefront to one
-selectable axis.
+Group the leaf's products as variants of each other using **one dimension named `Variant`**.
+Do **not** create one axis per spec column — a single `Variant` value keeps the storefront to
+one selectable axis.
 
-> Example value: `100 / 0,5 / 1-4 / 16x4x0,10`
+**Choosing the `Variant` value (in priority order):**
+
+1. **Only the values that DIFFER across the leaf's products**, slash-joined in column order.
+   A spec column whose value is identical for every product in the leaf carries no
+   information and is dropped — the value should be just enough to tell the variants apart.
+   - All spec columns differ → join them all: `100 / 0,5 / 1-4 / 16x4x0,10`.
+   - Only one spec column differs (e.g. Area) → use just that: `0,5`.
+2. **No spec column differs** (the products are distinguished by something not in a spec
+   column — typically color/length in the product name) → fall back to the **differing part
+   of the product name**: strip the longest common prefix across the leaf's product names and
+   use the remainder. E.g. `SKK 2x0.75 H03VV-F Svart` / `…Vit` → `Svart` / `Vit`.
+3. **A single product with no distinguishing data at all** → use the full product name
+   (`Geins_Produktnamn`), as a last resort.
+
+The goal is a `Variant` value that is **unique per product within the leaf** and as short as
+possible. (Note: parameters still capture *all* populated spec columns regardless — §7 — even
+the ones dropped from the variant value because they're identical.)
+
+> Examples: `100 / 0,5 / 1-4 / 16x4x0,10` (all differ) · `0,5` (only Area differs) ·
+> `Svart` / `Vit` (no spec differs → name token)
 
 **Preflight — are the products already in a variant group?**
 
@@ -200,16 +218,24 @@ Register the `Variant` label once (if not already registered), then create with 
 bun run src/bin.ts product variants labels add "Variant" --account prod-elproman  # idempotent-ish; skip if present
 
 python3 - "$CSV" > /tmp/variant-body.json <<'PY'
-import csv, sys, json
+import csv, sys, json, os
 rows = list(csv.reader(open(sys.argv[1], encoding='utf-8-sig'), delimiter=';'))
 hdr = rows[0]; idx = {n:i for i,n in enumerate(hdr)}
 dims = ["Beskrivning","För max area (mm2)","Bredd (mm)","Delning (mm)","Höjd (mm)"]  # the leaf's populated spec cols
+recs = [r for r in rows[1:] if r[idx["Geins_GeinsId"]].strip()]
+# keep only spec columns whose value DIFFERS across the leaf's products
+differ = [c for c in dims if len({r[idx[c]].strip() for r in recs}) > 1]
+names = [r[idx["Geins_Produktnamn"]].strip() for r in recs]
+prefix = os.path.commonprefix(names)  # for the name-token fallback
 products=[]
-for r in rows[1:]:
-    gid=r[idx["Geins_GeinsId"]].strip()
-    if not gid: continue
-    vals=[r[idx[c]].strip() for c in dims if r[idx[c]].strip()]
-    products.append({"id":int(gid),"dimensions":{"Variant":" / ".join(vals)}})
+for r in recs:
+    gid = r[idx["Geins_GeinsId"]].strip()
+    if differ:                                   # 1: only the differing spec values
+        variant = " / ".join(r[idx[c]].strip() for c in differ if r[idx[c]].strip())
+    else:                                        # 2: no spec differs -> differing name token
+        nm = r[idx["Geins_Produktnamn"]].strip()
+        variant = nm[len(prefix):].strip() or nm
+    products.append({"id": int(gid), "dimensions": {"Variant": variant}})
 print(json.dumps({"name":"<leafName>","labels":["Variant"],"products":products}, ensure_ascii=False, indent=2))
 PY
 
