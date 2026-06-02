@@ -60,8 +60,8 @@ const PRODUCT_HELP = [
   '  variants create [flags | JSON]            Create a variant group from existing products',
   '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
   '  images <id> [--json]                      List a product\'s images',
-  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   Upload an image (jpg/png/gif)',
-  '  images add-existing <id> <imageName>      Link an already-uploaded image to the product (no upload)',
+  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   Upload an image (jpg/png/gif); prints the stored name (Geins may rename on upload)',
+  '  images add-existing <id> <imageName>      Link an already-uploaded image to the product (no upload); pass the STORED name from a prior `images add`',
   '  images delete <id> <imageName>            Remove an image',
   '  images set-primary <id> <imageName>       Make an image the primary one',
   '  images reorder <id> <imageName> <pos>     Change an image\'s position',
@@ -787,8 +787,16 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               }
               const f = parseImgFlags(subArgs.slice(3));
               const r = await addProductImage(id, source, { idType: f.idType, name: f.name, primary: f.primary, position: f.position });
-              if (jsonMode) console.log(JSON.stringify(r, null, 2));
-              else console.log(`✓ Uploaded ${r.imageName}${f.primary ? ' (primary)' : ''} to product ${id}`);
+              // Geins may rename an image on upload; FileName is the stored name to reuse
+              // with `add-existing`. Fall back to the sent name if the API omits it.
+              const stored = r.FileName ?? r.imageName;
+              if (jsonMode) {
+                console.log(JSON.stringify({ source, imageName: r.imageName, fileName: r.FileName ?? null, stored }, null, 2));
+              } else {
+                const renamed = r.FileName != null && r.FileName !== r.imageName;
+                console.log(`✓ Uploaded ${r.imageName}${renamed ? ` → stored as ${stored}` : ''}${f.primary ? ' (primary)' : ''} to product ${id}`);
+                if (renamed) console.log(`  Reuse with: geins product images add-existing <id> ${stored}`);
+              }
               break;
             }
             if (action === 'add-existing' || action === 'link') {
