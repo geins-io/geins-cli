@@ -1026,6 +1026,27 @@ export async function assignProductCategory(
   });
 }
 
+/**
+ * Make `categoryId` the product's MAIN category. The Management API has no writable
+ * MainCategoryId field; instead, on a product create/update the FIRST entry of CategoryIds
+ * becomes the main category. So we read the product's current categories, move (or prepend)
+ * the target to the front, and write the reordered CategoryIds — preserving the other
+ * assignments. Returns the resulting CategoryIds order that was written.
+ */
+export async function setMainCategory(
+  productId: string,
+  categoryId: number,
+  options?: { idType?: ProductIdType },
+): Promise<number[]> {
+  const product = await getProduct(productId, { idType: options?.idType, include: 'Categories' });
+  const current = (product.Categories ?? [])
+    .map((c) => c.CategoryId)
+    .filter((id): id is number => typeof id === 'number');
+  const ordered = [categoryId, ...current.filter((id) => id !== categoryId)];
+  await updateProduct(productId, { CategoryIds: ordered }, { idType: options?.idType });
+  return ordered;
+}
+
 export interface UnassignCategoryResult {
   /** True when the category was actually removed (present before, gone after). */
   removed: boolean;
