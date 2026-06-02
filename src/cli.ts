@@ -28,6 +28,24 @@ import {
   getVariable,
   saveVariable,
 } from './commands/workflows.ts';
+import {
+  queryOrders,
+  getOrder,
+  countOrders,
+  getOrderStatuses,
+  createOrder,
+  validateOrderCreation,
+  setOrderStatus,
+  updateOrder,
+  cancelOrderRow,
+  addOrderComment,
+  setOrderTransaction,
+  setPaymentPaid,
+  deleteOrder,
+  orderSummary,
+  parseOrderListArgs,
+  type OrderUpdate,
+} from './commands/orders.ts';
 
 const VERSION = '0.1.0';
 
@@ -122,6 +140,51 @@ const PRODUCT_HELP = [
   '  geins product list --account prod-elproman   # pick a live-API account (headless)',
 ].join('\n');
 
+const ORDER_HELP = [
+  'geins order — inspect and handle orders (Management API)',
+  '',
+  'Subcommands:',
+  '  list [filters] [--json]                   Query orders (alias: query); defaults to page 1',
+  '  get <idOrPublicId> [--include <fields>] [--json]   One order (UUID → fetched by public id)',
+  '  count <email>                             Number of orders for a customer email',
+  '  statuses                                  List the available order status codes',
+  '  create [--file <path> | --body \'<json>\' | stdin]   Create (place) an order; returns the new id',
+  '  validate [--file | --body | stdin]        Validate an order body before creating it',
+  '  status <id> <status> [<txId> [<secondaryTxId>]]    Change order status',
+  '  update <id> [--external-id <s>] [--parcel <s>] [--external-status <0|10|20|30|40>] [--return-parcel <s>] | [--body \'<json>\']   Partial update',
+  '  cancel-row <orderId> <orderRowId>         Cancel a single order row',
+  '  comment <id> <text> [--system]            Add a comment to an order',
+  '  transaction <id> <transactionId>          Set the payment transaction id',
+  '  set-paid <paymentDetailId>                Mark a payment detail as paid',
+  '  delete <id>                               Delete an order',
+  '',
+  'list / query filters:',
+  '  --status <csv>               Status codes, comma-separated (StatusList)',
+  '  --email <email>              Customer email',
+  '  --customer <id>              Customer id',
+  '  --market <id>                Market id',
+  '  --payment <name>             Payment method name',
+  '  --external-status <0-40>     External order status (0|10|20|30|40)',
+  '  --created-after / --created-before <ISO8601>',
+  '  --updated-after / --updated-before <ISO8601>',
+  '  --completed-after / --completed-before <ISO8601>',
+  '  --include <fields>           Child collections, e.g. Rows,ShippingAddress',
+  '  --page <n>                   Page number',
+  '  --batch <id>                 BatchId from a prior page (required for page > 1)',
+  '  --json                       Raw JSON output',
+  '',
+  'Examples:',
+  '  geins order statuses',
+  '  geins order list --status 2 --json',
+  '  geins order get 100123 --include Rows,ShippingAddress',
+  '  geins order get 7b2e... --json            # public id (UUID)',
+  '  geins order count customer@example.com',
+  '  geins order comment 100123 "Called customer" ',
+  '  geins order status 100123 5',
+  '  geins order update 100123 --external-id EXT-9 --parcel ABC123',
+  '  cat order.json | geins order create',
+].join('\n');
+
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
 async function resolveBody(args: string[]): Promise<unknown> {
   const fileIdx = args.indexOf('--file');
@@ -208,6 +271,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
     console.log('  product    Product commands (get, list, items, variants, images, relations, parameters) — uses Management API');
+    console.log('  order      Order commands (list, get, count, statuses, create, status, update, comment) — uses Management API');
     console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped\n');
@@ -232,6 +296,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
 
   if (commandArgs.includes('--help')) {
     if (commandName === 'product') console.log(PRODUCT_HELP);
+    else if (commandName === 'order') console.log(ORDER_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -1201,6 +1266,149 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               console.error(PRODUCT_HELP);
               process.exit(1);
             }
+        }
+        break;
+      }
+      case 'order': {
+        const sub = commandArgs[0]?.toLowerCase() ?? 'list';
+        const subArgs = commandArgs.slice(1);
+        const jsonMode = commandArgs.includes('--json');
+
+        switch (sub) {
+          case 'list':
+          case 'query': {
+            const { query, page, json } = parseOrderListArgs(subArgs);
+            // The plain /Query endpoint accepts an empty body; the paged /Query/{page}
+            // endpoint 500s on some accounts unless filtered, so only page when asked.
+            const result = await queryOrders(query, { page });
+            if (json) { console.log(JSON.stringify(result, null, 2)); break; }
+            if (result.orders.length === 0) { console.log('No orders found.'); break; }
+            for (const o of result.orders) console.log(orderSummary(o));
+            const pr = result.page;
+            if (pr) {
+              console.log(`\n${result.orders.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
+              if (pr.HasMoreRows) console.log(`Next page: geins order list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+            }
+            break;
+          }
+          case 'get': {
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins order get <idOrPublicId> [--include <fields>] [--json]'); process.exit(1); }
+            const incIdx = subArgs.indexOf('--include');
+            const include = incIdx !== -1 ? subArgs[incIdx + 1] : undefined;
+            const order = await getOrder(id, { include });
+            if (jsonMode) { console.log(JSON.stringify(order, null, 2)); break; }
+            console.log(orderSummary(order));
+            if (order.PublicId) console.log(`  Public id: ${order.PublicId}`);
+            if (order.MarketName) console.log(`  Market: ${order.MarketName}`);
+            const email = order.CustomerEmail ?? order.BillingAddress?.Email ?? order.ShippingAddress?.Email;
+            if (email) console.log(`  Customer: ${email}`);
+            for (const r of order.Rows ?? []) {
+              const qty = r.Quantity != null ? `${r.Quantity}× ` : '';
+              const price = r.PriceIncVat != null ? `  ${r.PriceIncVat} ${order.Currency ?? ''}`.trimEnd() : '';
+              console.log(`  ${qty}${r.Name ?? r.ArticleNumber ?? r.ProductId ?? '?'}${price}`);
+            }
+            break;
+          }
+          case 'count': {
+            const email = subArgs[0];
+            if (!email) { console.error('Usage: geins order count <email>'); process.exit(1); }
+            const n = await countOrders(email);
+            console.log(jsonMode ? JSON.stringify({ email, count: n }, null, 2) : `${n}`);
+            break;
+          }
+          case 'statuses': {
+            const statuses = await getOrderStatuses();
+            console.log(JSON.stringify(statuses, null, 2));
+            break;
+          }
+          case 'create': {
+            const body = await resolveBody(subArgs);
+            const id = await createOrder(body as Parameters<typeof createOrder>[0]);
+            console.log(jsonMode ? JSON.stringify({ orderId: id }, null, 2) : `✓ Created order ${id}`);
+            break;
+          }
+          case 'validate': {
+            const body = await resolveBody(subArgs);
+            const result = await validateOrderCreation(body as Parameters<typeof validateOrderCreation>[0]);
+            if (jsonMode) { console.log(JSON.stringify(result, null, 2)); break; }
+            console.log(`${result.Success ? '✓' : '✗'} ${result.Success ? 'Valid' : 'Invalid'}${result.Message ? `: ${result.Message}` : ''}`);
+            if (!result.Success) process.exit(1);
+            break;
+          }
+          case 'status': {
+            const id = subArgs[0];
+            const status = subArgs[1];
+            if (!id || !status) { console.error('Usage: geins order status <id> <status> [<transactionId> [<secondaryTransactionId>]]'); process.exit(1); }
+            await setOrderStatus(id, status, subArgs[2], subArgs[3]);
+            console.log(`✓ Order ${id} status set to ${status}`);
+            break;
+          }
+          case 'update': {
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins order update <id> [--external-id <s>] [--parcel <s>] [--external-status <n>] [--return-parcel <s>] | [--body \'<json>\']'); process.exit(1); }
+            const flag = (name: string) => { const i = subArgs.indexOf(name); return i !== -1 ? subArgs[i + 1] : undefined; };
+            let changes: OrderUpdate;
+            if (subArgs.includes('--body') || subArgs.includes('--file')) {
+              changes = (await resolveBody(subArgs.slice(1))) as OrderUpdate;
+            } else {
+              const extStatus = flag('--external-status');
+              changes = {
+                ExternalId: flag('--external-id'),
+                ParcelNumber: flag('--parcel'),
+                ReturnParcelNumber: flag('--return-parcel'),
+                ExternalOrderStatus: extStatus != null && !Number.isNaN(Number(extStatus)) ? Number(extStatus) : undefined,
+              };
+            }
+            await updateOrder(id, changes);
+            console.log(`✓ Updated order ${id}`);
+            break;
+          }
+          case 'cancel-row': {
+            const orderId = subArgs[0];
+            const orderRowId = subArgs[1];
+            if (!orderId || !orderRowId) { console.error('Usage: geins order cancel-row <orderId> <orderRowId>'); process.exit(1); }
+            await cancelOrderRow(orderId, orderRowId);
+            console.log(`✓ Cancelled row ${orderRowId} on order ${orderId}`);
+            break;
+          }
+          case 'comment': {
+            const id = subArgs[0];
+            const text = subArgs.slice(1).filter((a) => a !== '--system').join(' ');
+            if (!id || !text) { console.error('Usage: geins order comment <id> <text> [--system]'); process.exit(1); }
+            await addOrderComment(id, text, { system: subArgs.includes('--system') });
+            console.log(`✓ Added comment to order ${id}`);
+            break;
+          }
+          case 'transaction': {
+            const id = subArgs[0];
+            const transactionId = subArgs[1];
+            if (!id || !transactionId) { console.error('Usage: geins order transaction <id> <transactionId>'); process.exit(1); }
+            await setOrderTransaction(id, transactionId);
+            console.log(`✓ Set transaction ${transactionId} on order ${id}`);
+            break;
+          }
+          case 'set-paid': {
+            const paymentDetailId = subArgs[0];
+            if (!paymentDetailId) { console.error('Usage: geins order set-paid <paymentDetailId>'); process.exit(1); }
+            await setPaymentPaid(paymentDetailId);
+            console.log(`✓ Marked payment ${paymentDetailId} as paid`);
+            break;
+          }
+          case 'delete': {
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins order delete <id>'); process.exit(1); }
+            await deleteOrder(id);
+            console.log(`✓ Deleted order ${id}`);
+            break;
+          }
+          case 'help':
+            console.log(ORDER_HELP);
+            break;
+          default:
+            console.error(`Unknown subcommand: order ${sub}\n`);
+            console.error(ORDER_HELP);
+            process.exit(1);
         }
         break;
       }

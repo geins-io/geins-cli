@@ -51,6 +51,24 @@ import {
   getVariable,
   saveVariable,
 } from '../commands/workflows.ts';
+import {
+  queryOrders,
+  getOrder,
+  countOrders,
+  getOrderStatuses,
+  createOrder,
+  validateOrderCreation,
+  setOrderStatus,
+  updateOrder,
+  cancelOrderRow,
+  addOrderComment,
+  setOrderTransaction,
+  setPaymentPaid,
+  deleteOrder,
+  orderSummary,
+  parseOrderListArgs,
+  type OrderUpdate,
+} from '../commands/orders.ts';
 import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
 
@@ -470,6 +488,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /apikey     Manage API accounts         /apikey list | add | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id> | list | items <id> | variants <id>');
+          logText('  /order      Order commands          /order list | get <id> | statuses | status <id> <s>');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /management Management API           /management GET /API/Market/List');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
@@ -1371,6 +1390,169 @@ export function App({ version = VERSION }: { version?: string }) {
                 logError(`  Unknown subcommand: ${sub}`);
               }
               logDim('  Type /product help for available commands');
+          }
+          break;
+        }
+
+        case 'order': {
+          const sub = args[0]?.toLowerCase() ?? 'list';
+          const subArgs = args.slice(1);
+          const spin = (label: string) => appState.setLiveComponent(
+            <Box key="order-spinner" gap={1} paddingX={1}><Spinner type="dots" /><Text dimColor>{label}</Text></Box>,
+          );
+          const readBody = (a: string[]): unknown => {
+            const bi = a.indexOf('--body');
+            if (bi !== -1 && a[bi + 1]) return JSON.parse(a[bi + 1]!);
+            throw new Error("Provide --body '<json>' (use the direct CLI `geins order ...` for --file/stdin).");
+          };
+          switch (sub) {
+            case 'list':
+            case 'query': {
+              const { query, page } = parseOrderListArgs(subArgs);
+              spin('Querying orders...');
+              const result = await queryOrders(query, { page });
+              appState.setLiveComponent(null);
+              if (result.orders.length === 0) { logDim('  No orders found.'); break; }
+              for (const o of result.orders) logText(`  ${orderSummary(o)}`);
+              const pr = result.page;
+              if (pr) {
+                logDim(`  ${result.orders.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
+                if (pr.HasMoreRows) logDim(`  Next: /order list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+              }
+              break;
+            }
+            case 'get': {
+              const id = subArgs[0];
+              if (!id) { logError('  Usage: /order get <idOrPublicId> [--include <fields>]'); break; }
+              const incIdx = subArgs.indexOf('--include');
+              const include = incIdx !== -1 ? subArgs[incIdx + 1] : undefined;
+              spin(`Fetching order ${id}...`);
+              const order = await getOrder(id, { include });
+              appState.setLiveComponent(null);
+              logText(`  ${orderSummary(order)}`);
+              if (order.MarketName) logDim(`  Market: ${order.MarketName}`);
+              const email = order.CustomerEmail ?? order.BillingAddress?.Email ?? order.ShippingAddress?.Email;
+              if (email) logDim(`  Customer: ${email}`);
+              for (const r of order.Rows ?? []) {
+                const qty = r.Quantity != null ? `${r.Quantity}× ` : '';
+                const price = r.PriceIncVat != null ? `  ${r.PriceIncVat} ${order.Currency ?? ''}`.trimEnd() : '';
+                logText(`    ${qty}${r.Name ?? r.ArticleNumber ?? r.ProductId ?? '?'}${price}`);
+              }
+              break;
+            }
+            case 'count': {
+              const email = subArgs[0];
+              if (!email) { logError('  Usage: /order count <email>'); break; }
+              spin(`Counting orders for ${email}...`);
+              const n = await countOrders(email);
+              appState.setLiveComponent(null);
+              logText(`  ${n} order${n === 1 ? '' : 's'} for ${email}`);
+              break;
+            }
+            case 'statuses': {
+              spin('Loading statuses...');
+              const statuses = await getOrderStatuses();
+              appState.setLiveComponent(null);
+              logText(`  ${JSON.stringify(statuses, null, 2)}`);
+              break;
+            }
+            case 'create': {
+              spin('Creating order...');
+              try {
+                const orderId = await createOrder(readBody(subArgs) as Parameters<typeof createOrder>[0]);
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Created order ${orderId}`);
+              } catch (err) { appState.setLiveComponent(null); throw err; }
+              break;
+            }
+            case 'validate': {
+              spin('Validating order...');
+              try {
+                const result = await validateOrderCreation(readBody(subArgs) as Parameters<typeof validateOrderCreation>[0]);
+                appState.setLiveComponent(null);
+                if (result.Success) logSuccess(`  ✓ Valid${result.Message ? `: ${result.Message}` : ''}`);
+                else logError(`  ✗ Invalid${result.Message ? `: ${result.Message}` : ''}`);
+              } catch (err) { appState.setLiveComponent(null); throw err; }
+              break;
+            }
+            case 'status': {
+              const id = subArgs[0]; const status = subArgs[1];
+              if (!id || !status) { logError('  Usage: /order status <id> <status> [<txId> [<secondaryTxId>]]'); break; }
+              await setOrderStatus(id, status, subArgs[2], subArgs[3]);
+              logSuccess(`  ✓ Order ${id} status set to ${status}`);
+              break;
+            }
+            case 'update': {
+              const id = subArgs[0];
+              if (!id) { logError('  Usage: /order update <id> [--external-id <s>] [--parcel <s>] [--external-status <n>] [--return-parcel <s>] | [--body \'<json>\']'); break; }
+              const flag = (name: string) => { const i = subArgs.indexOf(name); return i !== -1 ? subArgs[i + 1] : undefined; };
+              let changes: OrderUpdate;
+              if (subArgs.includes('--body') || subArgs.includes('--file')) {
+                changes = readBody(subArgs.slice(1)) as OrderUpdate;
+              } else {
+                const extStatus = flag('--external-status');
+                changes = {
+                  ExternalId: flag('--external-id'),
+                  ParcelNumber: flag('--parcel'),
+                  ReturnParcelNumber: flag('--return-parcel'),
+                  ExternalOrderStatus: extStatus != null && !Number.isNaN(Number(extStatus)) ? Number(extStatus) : undefined,
+                };
+              }
+              await updateOrder(id, changes);
+              logSuccess(`  ✓ Updated order ${id}`);
+              break;
+            }
+            case 'cancel-row': {
+              const orderId = subArgs[0]; const orderRowId = subArgs[1];
+              if (!orderId || !orderRowId) { logError('  Usage: /order cancel-row <orderId> <orderRowId>'); break; }
+              await cancelOrderRow(orderId, orderRowId);
+              logSuccess(`  ✓ Cancelled row ${orderRowId} on order ${orderId}`);
+              break;
+            }
+            case 'comment': {
+              const id = subArgs[0];
+              const text = subArgs.slice(1).filter((a) => a !== '--system').join(' ');
+              if (!id || !text) { logError('  Usage: /order comment <id> <text> [--system]'); break; }
+              await addOrderComment(id, text, { system: subArgs.includes('--system') });
+              logSuccess(`  ✓ Added comment to order ${id}`);
+              break;
+            }
+            case 'transaction': {
+              const id = subArgs[0]; const transactionId = subArgs[1];
+              if (!id || !transactionId) { logError('  Usage: /order transaction <id> <transactionId>'); break; }
+              await setOrderTransaction(id, transactionId);
+              logSuccess(`  ✓ Set transaction ${transactionId} on order ${id}`);
+              break;
+            }
+            case 'set-paid': {
+              const paymentDetailId = subArgs[0];
+              if (!paymentDetailId) { logError('  Usage: /order set-paid <paymentDetailId>'); break; }
+              await setPaymentPaid(paymentDetailId);
+              logSuccess(`  ✓ Marked payment ${paymentDetailId} as paid`);
+              break;
+            }
+            case 'delete': {
+              const id = subArgs[0];
+              if (!id) { logError('  Usage: /order delete <id>'); break; }
+              await deleteOrder(id);
+              logSuccess(`  ✓ Deleted order ${id}`);
+              break;
+            }
+            case 'help':
+              logText('');
+              logText('  /order list [filters]    Query orders');
+              logText('  /order get <id>          Show one order (UUID → by public id)');
+              logText('  /order count <email>     Orders for a customer');
+              logText('  /order statuses          List status codes');
+              logText('  /order create --body \'<json>\'   Place an order');
+              logText('  /order status <id> <status>     Change status');
+              logText('  /order update <id> [--external-id <s>] [--parcel <s>] ...');
+              logText('  /order cancel-row <orderId> <rowId> | comment <id> <text> | delete <id>');
+              logText('');
+              break;
+            default:
+              logError(`  Unknown subcommand: order ${sub}`);
+              logDim('  Type /order help for available commands');
           }
           break;
         }
