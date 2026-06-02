@@ -125,15 +125,23 @@ not surface (they are stored but hidden until the category is active):
 bun run src/bin.ts product categories update 365 --active --account prod-elproman
 ```
 
-Assign every product of the leaf to the new category id:
+Assign every product of the leaf to the new category id, then make the leaf the **main**
+category:
 
 ```bash
-bun run src/bin.ts product categories assign <GeinsId> 365 --account prod-elproman
+bun run src/bin.ts product categories assign   <GeinsId> 365 --account prod-elproman
+bun run src/bin.ts product categories set-main <GeinsId> 365 --account prod-elproman
 ```
 
 - The parent (e.g. `3`) is auto-included as an ancestor in the product's `Categories`.
-- `assign` does **not** set the main category (`MainCategoryId` stays 0); it adds to the list.
-- Verify: `geins product get <GeinsId> --include Categories --account … --json`.
+- `assign` only **adds** a category — it never changes the main.
+- **Main category = the FIRST entry of `CategoryIds`** on a product create/update; there is
+  **no writable `MainCategoryId`** (it's read-only, silently ignored on PUT). `set-main` reads
+  the current categories, moves the target to the front, and updates `CategoryIds` —
+  preserving the other assignments. (`assign` then `set-main` is fine; `set-main` also assigns
+  if needed via the reorder.)
+- Verify: `geins product get <GeinsId> --include Categories --account … --json` →
+  `MainCategoryId` should equal the leaf.
 
 ---
 
@@ -294,6 +302,8 @@ bun run src/bin.ts product parameters batch update --file /tmp/param-batch.json 
 
 - **`whoami` ignores `--account`** — verify routing by reading a product, not whoami.
 - **New categories are inactive** — activate them, or assignments stay hidden in reads.
+- **Main category = first in `CategoryIds`** on product create/update — `MainCategoryId` is
+  read-only and silently ignored on PUT. Use `categories set-main` (reorders `CategoryIds`).
 - **Category/param listing is unreliable** on some accounts — you may not be able to check
   for existing items by name; create fresh and reconcile duplicates afterward.
 - **Image names are global & flat**: PUT clobbers same-named files across products; use
@@ -333,7 +343,7 @@ bun run src/bin.ts product parameters batch update --file /tmp/param-batch.json 
 | Operation | Command |
 |-----------|---------|
 | Long text | `product text set <id> longtext "sv:<Text>"` |
-| Category | `product categories create --name "sv:<Leaf>" --parent <pid> --desc "sv:<Text>"` → `update <cat> --active` → `categories assign <id> <cat>` |
+| Category | `product categories create --name "sv:<Leaf>" --parent <pid> --desc "sv:<Text>"` → `update <cat> --active` → `categories assign <id> <cat>` → `categories set-main <id> <cat>` |
 | Image (upload) | `product images add <id> <url> --json` (capture `stored`) |
 | Image (reuse) | `product images add-existing <id> <stored>` |
 | Variant group | one `Variant` axis = slash-joined spec values. New: `variants create --file body.json`; existing: `variants set <id> "Variant=…"`; rebuild: `variants delete <groupId>` then create |
