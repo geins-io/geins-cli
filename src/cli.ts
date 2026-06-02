@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
@@ -58,6 +58,8 @@ const PRODUCT_HELP = [
   '  items <id> [--idtype <0-3>] [--json]      List a product\'s items (SKUs of one product)',
   '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
   '  variants create [flags | JSON]            Create a variant group from existing products',
+  '  variants set <id> <Label=Value>...        Set/overwrite dimensions of a product already in a group',
+  '  variants delete <groupId>                 Delete a whole variant group',
   '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
   '  images <id> [--json]                      List a product\'s images',
   '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>] [--add]   Upload an image (jpg/png/gif); keeps & prints the stored name. --add uses POST (add) instead of PUT (upsert)',
@@ -723,6 +725,37 @@ async function runDirect(rawArgs: string[]): Promise<void> {
                 console.log('\nNote: the main product cannot be set via the Management API (no MainProductId on write).');
               }
               if (!result.allSucceeded) process.exit(1);
+              break;
+            }
+
+            // Update the variant dimensions of a product already in a group.
+            if (action === 'set') {
+              const productId = subArgs[1];
+              let setIdType: ProductIdType | undefined;
+              const pairs: string[] = [];
+              let skip = false;
+              for (const a of subArgs.slice(2)) {
+                if (skip) { const n = Number(a); if (n >= 0 && n <= 3) setIdType = n as ProductIdType; skip = false; continue; }
+                if (a === '--idtype') { skip = true; continue; }
+                pairs.push(a);
+              }
+              if (!productId || pairs.length === 0) {
+                console.error('Usage: geins product variants set <productId> <Label=Value> [<Label=Value>...] [--idtype <0-3>]');
+                process.exit(1);
+              }
+              // Split each pair on the first '=' (values may contain '/', spaces, commas).
+              const dimensions = pairs.map((p) => { const i = p.indexOf('='); return i === -1 ? { Label: p, Value: '' } : { Label: p.slice(0, i), Value: p.slice(i + 1) }; });
+              await setProductVariants(productId, dimensions, { idType: setIdType });
+              console.log(`✓ Set variant dimensions on product ${productId}: ${dimensions.map((d) => `${d.Label}=${d.Value}`).join(', ')}`);
+              break;
+            }
+
+            // Delete a whole variant group by id.
+            if (action === 'delete') {
+              const gid = Number(subArgs[1]);
+              if (Number.isNaN(gid)) { console.error('Usage: geins product variants delete <groupId>'); process.exit(1); }
+              await deleteVariantGroup(gid);
+              console.log(`✓ Deleted variant group ${gid}`);
               break;
             }
 
