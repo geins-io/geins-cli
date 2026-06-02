@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
@@ -67,6 +67,8 @@ const PRODUCT_HELP = [
   '  images reorder <id> <imageName> <pos>     Change an image\'s position',
   '  brands [list|get <id>|create --name <n> [--external-id <id>] [--desc <code>:<text>]|update <id> ...|delete <id>]   Manage brands',
   '  categories [list|get <id>|create --name <code>:<text> [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]|update <id> ...]   Manage categories',
+  '  text <id> [--idtype <0-3>] [--json]       List a product\'s localized texts (Names/ShortTexts/LongTexts/TechTexts)',
+  '  text set <id> <name|shorttext|longtext|techtext> <locale>:<text>...  [--idtype <0-3>]   Set/merge localized text (one locale, keeps the rest)',
   '  categories assign <productId> <categoryId> [--idtype <0-3>]     Assign a category to a product',
   '  categories unassign <productId> <categoryId> [--idtype <0-3>]   Remove a category from a product (preserves main)',
   '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
@@ -126,6 +128,9 @@ const PRODUCT_HELP = [
   '  geins product brands',
   '  geins product brands create --name Nike --external-id nike',
   '  geins product categories',
+  '  geins product text 2807',
+  '  geins product text set 2807 longtext sv:"Kopplingsplintar av transparent nylon."',
+  '  geins product text set 2807 longtext en:"Connection terminals."   # adds en, keeps sv',
   '  geins product categories create --name en:Shoes --parent 1',
   '  geins product categories assign 10001 42',
   '  geins product relation-types add Accessories',
@@ -971,6 +976,53 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             if (brands.length === 0) { console.log('No brands.'); break; }
             for (const b of brands) console.log(`${b.BrandId}  ${brandName(b)}${b.ExternalId ? `  (ext: ${b.ExternalId})` : ''}`);
             console.log(`\n${brands.length} brand${brands.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'text':
+          case 'texts': {
+            const idTypeFor = () => { const i = subArgs.indexOf('--idtype'); if (i !== -1 && subArgs[i + 1] != null) { const n = Number(subArgs[i + 1]); if (n >= 0 && n <= 3) return n as ProductIdType; } return undefined; };
+            const TEXT_FIELDS: ProductTextField[] = ['Names', 'ShortTexts', 'LongTexts', 'TechTexts'];
+            const action = subArgs[0]?.toLowerCase();
+
+            if (action === 'set') {
+              const id = subArgs[1];
+              const field = parseProductTextField(subArgs[2] ?? '');
+              // Positional <locale>:<text> entries follow the field; skip --idtype and its value.
+              const entryArgs: string[] = [];
+              let skipNext = false;
+              for (const a of subArgs.slice(3)) {
+                if (skipNext) { skipNext = false; continue; }
+                if (a === '--idtype') { skipNext = true; continue; }
+                entryArgs.push(a);
+              }
+              // <code>:<text>, first colon only (no colon → default-language content).
+              const entries: LocalizableContent[] = entryArgs.map((p) => { const c = p.indexOf(':'); return c === -1 ? { LanguageCode: '', Content: p } : { LanguageCode: p.slice(0, c), Content: p.slice(c + 1) }; });
+              if (!id || !field || entries.length === 0) {
+                console.error(`Usage: geins product text set <id> <${PRODUCT_TEXT_FIELD_TOKENS.join('|')}> <locale>:<text> [<locale>:<text>...] [--idtype <0-3>]`);
+                if (subArgs[2] && !field) console.error(`Unknown text field "${subArgs[2]}". Use one of: ${PRODUCT_TEXT_FIELD_TOKENS.join(', ')}.`);
+                process.exit(1);
+              }
+              const product = await setProductText(id, field, entries, { idType: idTypeFor() });
+              const result = (product[field] as LocalizableContent[] | undefined) ?? [];
+              console.log(`✓ Set ${field} on product ${id} (${entries.map((e) => e.LanguageCode || '–').join(', ')})`);
+              for (const e of result) console.log(`  ${e.LanguageCode || '–'}: ${e.Content}`);
+              break;
+            }
+
+            // list (default): geins product text <id> [--json]
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins product text <id> [--json]  |  geins product text set <id> <field> <locale>:<text>...'); process.exit(1); }
+            const product = await getProduct(id, { idType: idTypeFor(), include: TEXT_FIELDS.join(',') });
+            if (jsonMode) {
+              console.log(JSON.stringify(Object.fromEntries(TEXT_FIELDS.map((f) => [f, product[f] ?? []])), null, 2));
+              break;
+            }
+            for (const f of TEXT_FIELDS) {
+              const entries = (product[f] as LocalizableContent[] | undefined) ?? [];
+              if (entries.length === 0) continue;
+              console.log(f);
+              for (const e of entries) console.log(`  ${e.LanguageCode || '–'}: ${e.Content}`);
+            }
             break;
           }
           case 'categories':

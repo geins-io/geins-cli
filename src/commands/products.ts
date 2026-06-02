@@ -172,6 +172,88 @@ export async function getProduct(id: string, options?: GetProductOptions): Promi
   return envelope.Resource;
 }
 
+/** The writable shape of a product (Product.Models.Write.Product) — only the fields we touch. */
+export interface ProductWrite {
+  Names?: LocalizableContent[];
+  ShortTexts?: LocalizableContent[];
+  LongTexts?: LocalizableContent[];
+  TechTexts?: LocalizableContent[];
+  [key: string]: unknown;
+}
+
+/**
+ * PUT /API/Product/{id} — update a product. The API treats this as a partial merge at the
+ * property level (omitted properties are left unchanged), so we send only the supplied fields.
+ */
+export async function updateProduct(
+  id: string,
+  changes: ProductWrite,
+  options?: { idType?: ProductIdType },
+): Promise<Product> {
+  const envelope = await mgmtRequest<Envelope<Product>>(`/API/Product/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: changes,
+    query: { productIdType: options?.idType },
+  });
+  return envelope.Resource;
+}
+
+/** A product's localized text collections — each a LocalizableContent[] keyed by LanguageCode. */
+export type ProductTextField = 'Names' | 'ShortTexts' | 'LongTexts' | 'TechTexts';
+
+const PRODUCT_TEXT_FIELDS: Record<string, ProductTextField> = {
+  name: 'Names',
+  names: 'Names',
+  shorttext: 'ShortTexts',
+  shorttexts: 'ShortTexts',
+  longtext: 'LongTexts',
+  longtexts: 'LongTexts',
+  // The product's LongText is the catalog "Text" field; accept it as a convenience alias.
+  text: 'LongTexts',
+  techtext: 'TechTexts',
+  techtexts: 'TechTexts',
+};
+
+/** Resolve a CLI field token (e.g. "longtext") to its API collection name, or null if unknown. */
+export function parseProductTextField(token: string): ProductTextField | null {
+  return PRODUCT_TEXT_FIELDS[token.trim().toLowerCase()] ?? null;
+}
+
+/** The accepted CLI field tokens, for usage/help text. */
+export const PRODUCT_TEXT_FIELD_TOKENS = ['name', 'shorttext', 'longtext', 'techtext'] as const;
+
+/** Merge `updates` into `base` by LanguageCode: same-code entries are replaced, new ones appended. */
+export function mergeLocalizedContent(
+  base: LocalizableContent[],
+  updates: LocalizableContent[],
+): LocalizableContent[] {
+  const result = base.map((entry) => ({ ...entry }));
+  for (const update of updates) {
+    const idx = result.findIndex((entry) => entry.LanguageCode === update.LanguageCode);
+    if (idx === -1) result.push({ ...update });
+    else result[idx] = { ...update };
+  }
+  return result;
+}
+
+/**
+ * Merge localized entries into one of a product's text collections without disturbing the
+ * others. Read-merge-write: the existing collection is fetched, each entry replaces a
+ * same-LanguageCode entry (or is appended), and only that collection is written back. This
+ * makes translation additive — setting the `en` text never clobbers an existing `sv` text.
+ */
+export async function setProductText(
+  id: string,
+  field: ProductTextField,
+  entries: LocalizableContent[],
+  options?: { idType?: ProductIdType },
+): Promise<Product> {
+  const product = await getProduct(id, { idType: options?.idType, include: field });
+  const existing = (product[field] as LocalizableContent[] | undefined) ?? [];
+  const merged = mergeLocalizedContent(existing, entries);
+  return updateProduct(id, { [field]: merged }, { idType: options?.idType });
+}
+
 /** A product query body (Product.Models.ProductQuery). All fields optional. */
 export interface ProductQuery {
   UpdatedAfter?: string;
