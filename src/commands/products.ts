@@ -1191,7 +1191,7 @@ export async function getProductParameters(
   id: string,
   options?: { idType?: ProductIdType },
 ): Promise<ProductParameterValue[]> {
-  const product = await getProduct(id, { idType: options?.idType, include: 'ParameterValues' });
+  const product = await getProduct(id, { idType: options?.idType, include: 'Parameters' });
   return product.ParameterValues ?? [];
 }
 
