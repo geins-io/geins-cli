@@ -180,26 +180,26 @@ Group the leaf's products as variants of each other using **one dimension named 
 Do **not** create one axis per spec column — a single `Variant` value keeps the storefront to
 one selectable axis.
 
-**Choosing the `Variant` value (in priority order):**
+**Choosing the `Variant` value.** First decide which **dimensions vary** across the leaf's
+products. The candidate dimensions are the **populated spec columns** *plus* an implicit
+**`Färg`** (color = the last word of `Geins_Produktnamn`), included only if the color actually
+varies. Drop any dimension whose value is identical for every product (it carries no info).
+Then, based on **how many dimensions differ**:
 
-1. **Only the values that DIFFER across the leaf's products**, slash-joined in column order.
-   A spec column whose value is identical for every product in the leaf carries no
-   information and is dropped — the value should be just enough to tell the variants apart.
-   - All spec columns differ → join them all: `100 / 0,5 / 1-4 / 16x4x0,10`.
-   - Only one spec column differs (e.g. Area) → use just that: `0,5`.
-2. **No spec column differs** (the products are distinguished by something not in a spec
-   column — typically color/length in the product name) → fall back to the **differing part
-   of the product name**: strip the longest common prefix across the leaf's product names and
-   use the remainder. E.g. `SKK 2x0.75 H03VV-F Svart` / `…Vit` → `Svart` / `Vit`.
-3. **A single product with no distinguishing data at all** → use the full product name
-   (`Geins_Produktnamn`), as a last resort.
+| # differing dims | `Variant` value | Example |
+|---|---|---|
+| **0** | the full product name (`Geins_Produktnamn`) | `RKK 3G0.75 H05VV-F Svart` |
+| **exactly 1** | `<colname> <value>` (self-describing) | `Färg Svart` · `Area (mm2) 0,5` |
+| **2 or more** | the differing values slash-joined (color last) | `3 / 0,75 / 0,21 / 6,6 / Svart` |
 
-The goal is a `Variant` value that is **unique per product within the leaf** and as short as
-possible. (Note: parameters still capture *all* populated spec columns regardless — §7 — even
-the ones dropped from the variant value because they're identical.)
+The goal: a value that is **unique per product within the leaf** and as short as possible.
+Color is treated as a real dimension because spec columns alone often can't tell color
+variants apart (same gauge, different color). 
 
-> Examples: `100 / 0,5 / 1-4 / 16x4x0,10` (all differ) · `0,5` (only Area differs) ·
-> `Svart` / `Vit` (no spec differs → name token)
+Notes:
+- **Parameters still capture *all* populated spec columns** (§7), regardless of what's dropped
+  from the variant value — the variant value is only about telling siblings apart.
+- If the differing-dimension value still isn't unique (rare), append the product name.
 
 **Preflight — are the products already in a variant group?**
 
@@ -218,24 +218,33 @@ Register the `Variant` label once (if not already registered), then create with 
 bun run src/bin.ts product variants labels add "Variant" --account prod-elproman  # idempotent-ish; skip if present
 
 python3 - "$CSV" > /tmp/variant-body.json <<'PY'
-import csv, sys, json, os
+import csv, sys, json
 rows = list(csv.reader(open(sys.argv[1], encoding='utf-8-sig'), delimiter=';'))
 hdr = rows[0]; idx = {n:i for i,n in enumerate(hdr)}
-dims = ["Beskrivning","För max area (mm2)","Bredd (mm)","Delning (mm)","Höjd (mm)"]  # the leaf's populated spec cols
+specs = ["Beskrivning","För max area (mm2)","Bredd (mm)","Delning (mm)","Höjd (mm)"]  # the leaf's populated spec cols
 recs = [r for r in rows[1:] if r[idx["Geins_GeinsId"]].strip()]
-# keep only spec columns whose value DIFFERS across the leaf's products
-differ = [c for c in dims if len({r[idx[c]].strip() for r in recs}) > 1]
-names = [r[idx["Geins_Produktnamn"]].strip() for r in recs]
-prefix = os.path.commonprefix(names)  # for the name-token fallback
-products=[]
+def val(r, c): return r[idx[c]].strip()
+color = lambda r: val(r, "Geins_Produktnamn").split()[-1] if val(r, "Geins_Produktnamn") else ""
+# Candidate dimensions = spec cols that vary + implicit Färg (color) if it varies.
+diff = [c for c in specs if len({val(r, c) for r in recs}) > 1]
+if len({color(r) for r in recs}) > 1:
+    diff.append("Färg")
+def dim_value(r, c): return color(r) if c == "Färg" else val(r, c)
+products = []
 for r in recs:
-    gid = r[idx["Geins_GeinsId"]].strip()
-    if differ:                                   # 1: only the differing spec values
-        variant = " / ".join(r[idx[c]].strip() for c in differ if r[idx[c]].strip())
-    else:                                        # 2: no spec differs -> differing name token
-        nm = r[idx["Geins_Produktnamn"]].strip()
-        variant = nm[len(prefix):].strip() or nm
-    products.append({"id": int(gid), "dimensions": {"Variant": variant}})
+    gid = int(val(r, "Geins_GeinsId"))
+    if len(diff) == 0:                                  # 0: nothing varies -> product name
+        variant = val(r, "Geins_Produktnamn")
+    elif len(diff) == 1:                                # 1: "<colname> <value>"
+        c = diff[0]; variant = f"{c} {dim_value(r, c)}".strip()
+    else:                                               # 2+: differing values, color last
+        variant = " / ".join(dim_value(r, c) for c in diff if dim_value(r, c))
+    products.append({"id": gid, "dimensions": {"Variant": variant}})
+# Safety: if not unique, append the product name.
+seen = [p["dimensions"]["Variant"] for p in products]
+if len(set(seen)) != len(seen):
+    for p, r in zip(products, recs):
+        p["dimensions"]["Variant"] += " / " + val(r, "Geins_Produktnamn")
 print(json.dumps({"name":"<leafName>","labels":["Variant"],"products":products}, ensure_ascii=False, indent=2))
 PY
 
