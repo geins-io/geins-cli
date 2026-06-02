@@ -745,11 +745,14 @@ export async function uploadProductImage(
   return envelope.Resource ?? {};
 }
 
-/** Add an image to a product from a local file path or an http(s) URL. */
+/**
+ * Add an image to a product from a local file path or an http(s) URL.
+ * `method` selects the upload verb: 'PUT' (default) upserts under the exact name; 'POST' adds.
+ */
 export async function addProductImage(
   id: string,
   source: string,
-  options?: { idType?: ProductIdType; name?: string; primary?: boolean; position?: number },
+  options?: { idType?: ProductIdType; name?: string; primary?: boolean; position?: number; method?: 'PUT' | 'POST' },
 ): Promise<{ FileName?: string; imageName: string }> {
   const { bytes, name } = await loadImageSource(source);
   const imageName = options?.name ?? name;
@@ -761,6 +764,7 @@ export async function addProductImage(
     idType: options?.idType,
     primary: options?.primary,
     position: options?.position,
+    method: options?.method,
   });
   return { ...result, imageName };
 }

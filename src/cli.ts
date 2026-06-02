@@ -60,7 +60,7 @@ const PRODUCT_HELP = [
   '  variants create [flags | JSON]            Create a variant group from existing products',
   '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
   '  images <id> [--json]                      List a product\'s images',
-  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   Upload an image (jpg/png/gif); the original file name is kept and printed as the stored name',
+  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>] [--add]   Upload an image (jpg/png/gif); keeps & prints the stored name. --add uses POST (add) instead of PUT (upsert)',
   '  images add-existing <id> <imageName>      Link an already-uploaded image to the product (no upload); imageName is the original file name (the basename of the source)',
   '  images delete <id> <imageName>            Remove an image',
   '  images set-primary <id> <imageName>       Make an image the primary one',
@@ -768,13 +768,15 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               let primary = false;
               let name: string | undefined;
               let position: number | undefined;
+              let method: 'PUT' | 'POST' | undefined;
               for (let i = 0; i < args.length; i++) {
                 if (args[i] === '--idtype') { const n = Number(args[++i]); if (n >= 0 && n <= 3) idType = n as ProductIdType; }
                 else if (args[i] === '--primary') primary = true;
+                else if (args[i] === '--add') method = 'POST';
                 else if (args[i] === '--name') name = args[++i];
                 else if (args[i] === '--position') { const n = Number(args[++i]); if (!Number.isNaN(n)) position = n; }
               }
-              return { idType, primary, name, position };
+              return { idType, primary, name, position, method };
             };
             const action = subArgs[0]?.toLowerCase();
 
@@ -786,7 +788,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
                 process.exit(1);
               }
               const f = parseImgFlags(subArgs.slice(3));
-              const r = await addProductImage(id, source, { idType: f.idType, name: f.name, primary: f.primary, position: f.position });
+              const r = await addProductImage(id, source, { idType: f.idType, name: f.name, primary: f.primary, position: f.position, method: f.method });
               // The API keeps the original file name on upload (verified on prod-labs), so
               // FileName normally equals the sent name. We still surface FileName as the
               // authoritative stored name to reuse with `add-existing`, falling back to the
