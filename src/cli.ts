@@ -233,7 +233,7 @@ export async function run(argv: string[]): Promise<void> {
   }
 
   // Set the terminal window/tab title (held while the TUI runs).
-  process.stdout.write('\x1b]0;Geins CLI\x07');
+  process.stdout.write('\x1b]0;Geins terminal companion\x07');
 
   // Clear the screen (and scrollback) so the TUI starts on a clean canvas.
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
