@@ -47,6 +47,15 @@ export function resetCredentialsCache(): void {
   cachedCredentials = null;
 }
 
+/**
+ * The resolved API credentials for the active profile (honoring any --account
+ * override), throwing if none are set. Exposed so callers can read profile-attached
+ * config (e.g. the Merchant storefront context) consistently with merchantQuery.
+ */
+export async function getActiveCredentials(): Promise<ApiCredentials> {
+  return getCredentials();
+}
+
 function mgmtHeaders(creds: ApiCredentials): Record<string, string> {
   const basic = Buffer.from(`${creds.username}:${creds.managementApiPassword}`).toString('base64');
   return {

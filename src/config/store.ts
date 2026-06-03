@@ -42,11 +42,40 @@ export interface StoredSession {
  *   - Management API (REST): Basic Auth (username + managementApiPassword) + X-ApiKey (managementApiKey)
  *   - Merchant API (GraphQL): X-ApiKey (merchantApiKey)
  */
+/**
+ * Default checkout settings baked into every checkout token (mirrors the SDK's
+ * OMSSettings.checkoutUrls / defaultPaymentId / defaultShippingId). Stable per
+ * storefront, so set once via `merchant config set`; per-token flags override.
+ */
+export interface StoredCheckoutDefaults {
+  defaultPaymentId?: number;
+  defaultShippingId?: number;
+  customerType?: 'PERSON' | 'ORGANIZATION';
+  /** { terms, privacy, success, cancel, continue } */
+  redirectUrls?: { terms?: string; privacy?: string; success?: string; cancel?: string; continue?: string };
+  /** { title, icon, logo, styles:{ logoSize, radius, background, ... } } */
+  branding?: { title?: string; icon?: string; logo?: string; styles?: Record<string, string> };
+}
+
 export interface ApiCredentials {
   username: string;
   managementApiPassword: string;
   managementApiKey: string;
   merchantApiKey: string;
+  /**
+   * Merchant API (storefront) context, set via `merchant config set`. Optional —
+   * the Merchant API has server defaults for many queries, but a usable checkout
+   * token needs all of accountName/channel/tld/market/locale. Stored per-profile so
+   * switching api-key accounts restores the right context automatically.
+   */
+  accountName?: string;
+  channel?: string;
+  tld?: string;
+  market?: string;
+  locale?: string;
+  environment?: 'prod' | 'qa' | 'dev';
+  /** Default checkout settings merged into checkout tokens (see StoredCheckoutDefaults). */
+  checkout?: StoredCheckoutDefaults;
 }
 
 async function ensureDir(): Promise<void> {
@@ -145,6 +174,19 @@ export async function addCredentials(credentials: ApiCredentials): Promise<strin
   store.active = name;
   await saveCredentialsStore(store);
   return name;
+}
+
+/**
+ * Merge a partial patch into the active profile (used by `merchant config set` to
+ * persist storefront context onto the current api-key profile). Returns the active
+ * profile name, or null if there is no active profile.
+ */
+export async function updateActiveCredentials(patch: Partial<ApiCredentials>): Promise<string | null> {
+  const store = await loadCredentialsStore();
+  if (!store.active || !store.profiles[store.active]) return null;
+  store.profiles[store.active] = { ...store.profiles[store.active]!, ...patch };
+  await saveCredentialsStore(store);
+  return store.active;
 }
 
 /** Switch the active profile. Returns false if the name is unknown. */

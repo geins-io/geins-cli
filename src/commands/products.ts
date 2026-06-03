@@ -172,13 +172,32 @@ export async function getProduct(id: string, options?: GetProductOptions): Promi
   return envelope.Resource;
 }
 
-/** The writable shape of a product (Product.Models.Write.Product) — only the fields we touch. */
+/** The writable shape of a product (Product.Models.Write.Product). */
 export interface ProductWrite {
+  ArticleNumber?: string;
   Names?: LocalizableContent[];
+  Active?: boolean;
   ShortTexts?: LocalizableContent[];
   LongTexts?: LocalizableContent[];
   TechTexts?: LocalizableContent[];
+  PurchasePrice?: number;
+  PurchasePriceCurrency?: string;
+  BrandId?: number;
+  SupplierId?: number;
+  CategoryIds?: number[];
+  ExternalId?: string;
+  Vat?: number;
+  Weight?: number;
   [key: string]: unknown;
+}
+
+/**
+ * POST /API/Product — create a product. Returns the created product (incl. its new ProductId).
+ * Only ArticleNumber and at least one Name are needed in practice; everything else is optional.
+ */
+export async function createProduct(input: ProductWrite): Promise<Product> {
+  const envelope = await mgmtRequest<Envelope<Product>>('/API/Product', { method: 'POST', body: input });
+  return envelope.Resource;
 }
 
 /**

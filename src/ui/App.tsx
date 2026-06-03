@@ -12,7 +12,8 @@ import { SelectAccount } from './SelectAccount.tsx';
 import { Confirm } from './Confirm.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
-import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, loadConfig, saveConfig, type ApiCredentials } from '../config/store.ts';
+import { readFileSync } from 'node:fs';
+import { saveSession, addCredentials, loadCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, updateActiveCredentials, loadConfig, saveConfig, type ApiCredentials, type StoredCheckoutDefaults } from '../config/store.ts';
 import { resetCredentialsCache } from '../api/live-client.ts';
 import { setActiveSignal } from '../api/abort.ts';
 import { setOutputDir, getOutputDir } from '../output/sink.ts';
@@ -73,8 +74,39 @@ import {
   parseOrderListArgs,
   type OrderUpdate,
 } from '../commands/orders.ts';
+import {
+  listCampaigns,
+  getCampaignTypes,
+  getCampaign,
+  createCampaign,
+  buildPromoCodeCampaign,
+  campaignLabel,
+  type CampaignWrite,
+} from '../commands/campaigns.ts';
 import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { listMarkets, listLanguages, listChannels, listLocales, marketName, listUserAccounts } from '../commands/account.ts';
+import {
+  resolveMerchantContext,
+  searchProducts,
+  getProduct as getMerchantProduct,
+  listCategories as listMerchantCategories,
+  listBrands as listMerchantBrands,
+  createCart,
+  getCart,
+  addToCart,
+  updateCartItem,
+  removeFromCart,
+  setCartPromoCode,
+  buildCheckoutToken,
+  parseCheckoutToken,
+  productLine,
+  cartLines,
+  type ContextOverrides,
+  type CheckoutTokenOptions,
+  type CheckoutRedirects,
+  type CheckoutBranding,
+  type CustomerType,
+} from '../commands/merchant.ts';
 
 const VERSION = '0.1.0';
 
@@ -598,6 +630,8 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id> | list | items <id> | variants <id>');
           logText('  /order      Order commands          /order list | get <id> | statuses | status <id> <s>');
+          logText('  /campaign   Campaign commands       /campaign list | types | get <id> | create --promocode <c> ...');
+          logText('  /merchant   Storefront (Merchant API)  /merchant help');
           logText('  /api        Raw API request         /api GET /products');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
           logText('  /copilot    Toggle AI copilot mode  /copilot provider');
@@ -830,7 +864,12 @@ export function App({ version = VERSION }: { version?: string }) {
               trackWorkflowList(data.items as unknown as Array<Record<string, unknown>>);
               for (const wf of data.items) {
                 const status = wf.enabled ? '●' : '○';
-                logText(`  ${status} ${wf.name}`);
+                appState.addToChat(
+                  <Text key={`msg-${appState.getNextKey()}`}>
+                    {`  ${status} ${wf.name}  `}
+                    <Text dimColor>{wf.id}</Text>
+                  </Text>,
+                );
               }
               if (data.totalCount > 0) {
                 logDim(`  ${data.totalCount} workflows`);
@@ -1090,7 +1129,7 @@ export function App({ version = VERSION }: { version?: string }) {
               const CAP = 50;
               for (const p of result.products.slice(0, CAP)) {
                 const status = p.Active ? '●' : '○';
-                logText(`  ${status} ${productName(p)}  ${p.ArticleNumber ?? ''}`.trimEnd());
+                logText(`  ${status} ${productName(p)}  (${p.ProductId})${p.ArticleNumber ? `  ${p.ArticleNumber}` : ''}`.trimEnd());
               }
               if (result.products.length > CAP) logDim(`  … and ${result.products.length - CAP} more on this page`);
               const pr = result.page;
@@ -1598,7 +1637,9 @@ export function App({ version = VERSION }: { version?: string }) {
               logText('');
               logText('  /product get <id>        Show product details');
               logText('  /product list            Query products (filters below)');
-              logText('    --brand <id> --category <id> --article <n> --sellable --in-stock --page <n>');
+              logText('    --brand <id> --category <id> --article <n> --sellable --in-stock --page <n> --include <fields>');
+              logText('    --include (default Names): Names, ShortTexts, LongTexts, TechTexts, Items, Prices, Categories,');
+              logText('      Parameters, Variants, Markets, Images, Feeds, Urls, ShippingFees, RelatedProducts, DiscountCampaigns, LowestPrice');
               logText('  /product items <id>      List a product\'s items (SKUs)');
               logText('  /product variants <id>   Show the product\'s variant group (sibling products)');
               logText('  /product variants create        Build a group from existing products (interactive)');
@@ -1781,6 +1822,359 @@ export function App({ version = VERSION }: { version?: string }) {
             default:
               logError(`  Unknown subcommand: order ${sub}`);
               logDim('  Type /order help for available commands');
+          }
+          break;
+        }
+
+        case 'campaign': {
+          const sub = args[0]?.toLowerCase() ?? 'list';
+          const subArgs = args.slice(1);
+          const spin = (label: string) => appState.setLiveComponent(
+            <Box key="campaign-spinner" gap={1} paddingX={1}><Spinner type="dots" /><Text dimColor>{label}</Text></Box>,
+          );
+          const cFlag = (name: string) => { const i = subArgs.indexOf(name); return i !== -1 ? subArgs[i + 1] : undefined; };
+          const cNum = (name: string) => { const v = cFlag(name); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+          const cCollect = (name: string) => subArgs.flatMap((a, i) => (subArgs[i - 1] === name ? [a] : []));
+          const readBody = (a: string[]): unknown => {
+            const bi = a.indexOf('--body');
+            if (bi !== -1 && a[bi + 1]) return JSON.parse(a[bi + 1]!);
+            throw new Error("Provide --body '<json>' (use the direct CLI `geins campaign ...` for --file/stdin).");
+          };
+          switch (sub) {
+            case 'list': {
+              spin('Loading campaigns...');
+              const campaigns = await listCampaigns();
+              appState.setLiveComponent(null);
+              if (campaigns.length === 0) { logDim('  No campaigns.'); break; }
+              for (const c of campaigns) {
+                const code = c.PromoCode ? `[${c.PromoCode}] ` : '';
+                const bits = [c.Type, c.CampaignBaseType, c.Status].filter(Boolean).join(' · ');
+                logText(`  ${code}${c.Title ?? '(untitled)'}${bits ? `  — ${bits}` : ''}`);
+              }
+              break;
+            }
+            case 'types': {
+              spin('Loading campaign types...');
+              const types = await getCampaignTypes();
+              appState.setLiveComponent(null);
+              if (types.length === 0) { logDim('  No campaign types.'); break; }
+              for (const t of types) logText(`  ${t.Id}  ${t.Name}`);
+              break;
+            }
+            case 'get': {
+              const id = subArgs[0];
+              if (!id) { logError('  Usage: /campaign get <id>'); break; }
+              spin(`Fetching campaign ${id}...`);
+              const c = await getCampaign(id);
+              appState.setLiveComponent(null);
+              logText(`  ${campaignLabel(c)}`);
+              logDim(`  ${[c.Status, `base=${c.CampaignBaseType}`, `type=${c.CampaignTypeId}`].filter(Boolean).join(' · ')}`);
+              if (c.PromoCode) logDim(`  Code: ${c.PromoCode}`);
+              if (c.PercentageValue != null) logDim(`  Discount: ${c.PercentageValue}%`);
+              if (c.Amounts && Object.keys(c.Amounts).length) {
+                logDim(`  Amounts: ${Object.entries(c.Amounts).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+              }
+              logDim(`  Enabled: ${c.Enabled ? 'yes' : 'no'}`);
+              break;
+            }
+            case 'create': {
+              const hasFlags = subArgs.includes('--promocode');
+              let body: CampaignWrite;
+              if (subArgs.includes('--body')) {
+                body = readBody(subArgs) as CampaignWrite;
+              } else if (hasFlags) {
+                const promoCode = cFlag('--promocode');
+                const marketId = cFlag('--market');
+                if (!promoCode || !marketId) {
+                  logError("  Usage: /campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <c>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer]");
+                  break;
+                }
+                const amounts: Record<string, number> = {};
+                for (const pair of cCollect('--amount')) {
+                  const ci = pair.indexOf(':');
+                  const cur = ci === -1 ? pair : pair.slice(0, ci);
+                  const val = ci === -1 ? NaN : Number(pair.slice(ci + 1));
+                  if (cur && !Number.isNaN(val)) amounts[cur.toUpperCase()] = val;
+                }
+                const titleText = cFlag('--title');
+                body = buildPromoCodeCampaign({
+                  promoCode,
+                  marketId,
+                  percentage: cNum('--percentage'),
+                  amounts: Object.keys(amounts).length ? amounts : undefined,
+                  title: titleText ? [{ Language: cFlag('--lang') ?? 'en', Value: titleText }] : undefined,
+                  validFrom: cFlag('--from'),
+                  validTo: cFlag('--to'),
+                  usageLimit: cNum('--usage-limit'),
+                  oncePerCustomer: subArgs.includes('--once-per-customer') ? true : undefined,
+                  priority: cNum('--priority'),
+                  enabled: subArgs.includes('--disabled') ? false : subArgs.includes('--enabled') ? true : undefined,
+                });
+              } else {
+                logError("  Usage: /campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [...]  |  --body '<json>'");
+                break;
+              }
+              spin('Creating campaign...');
+              try {
+                const campaign = await createCampaign(body);
+                appState.setLiveComponent(null);
+                logSuccess(`  ✓ Created campaign ${campaignLabel(campaign)}`);
+                if (campaign.PromoCode) logDim(`  Code: ${campaign.PromoCode}`);
+              } catch (err) { appState.setLiveComponent(null); throw err; }
+              break;
+            }
+            case 'help':
+              logText('');
+              logText('  /campaign list                  List campaigns');
+              logText('  /campaign types                 Discount type ids (3=Percentage, 4=Fixed amount)');
+              logText('  /campaign get <id>              Show one campaign');
+              logText('  /campaign create --promocode <CODE> --market <id> --percentage <n>   Promocode campaign');
+              logText("  /campaign create ... --amount <CUR>:<n>   Fixed-amount discount  |  --body '<json>'");
+              logText('');
+              break;
+            default:
+              logError(`  Unknown subcommand: campaign ${sub}`);
+              logDim('  Type /campaign help for available commands');
+          }
+          break;
+        }
+
+        case 'merchant': {
+          const sub = args[0]?.toLowerCase() ?? '';
+          const subArgs = args.slice(1);
+          const mFlag = (name: string): string | undefined => {
+            const idx = args.indexOf(name);
+            return idx !== -1 ? args[idx + 1] : undefined;
+          };
+          const mJsonFlag = (name: string): unknown => {
+            const v = mFlag(name);
+            if (v === undefined) return undefined;
+            return JSON.parse(v.startsWith('@') ? readFileSync(v.slice(1), 'utf-8') : v);
+          };
+          const mIntList = (name: string): number[] | undefined => {
+            const v = mFlag(name);
+            return v ? v.split(',').map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n)) : undefined;
+          };
+          const mRedirects = (): CheckoutRedirects | undefined => {
+            const r: CheckoutRedirects = {};
+            if (mFlag('--terms')) r.terms = mFlag('--terms');
+            if (mFlag('--privacy')) r.privacy = mFlag('--privacy');
+            if (mFlag('--success')) r.success = mFlag('--success');
+            if (mFlag('--cancel')) r.cancel = mFlag('--cancel');
+            if (mFlag('--continue')) r.continue = mFlag('--continue');
+            return Object.keys(r).length ? r : undefined;
+          };
+          const mCustomerType = (): CustomerType | undefined => {
+            const c = mFlag('--customer-type')?.toLowerCase();
+            return c === 'organization' ? 'ORGANIZATION' : c === 'person' ? 'PERSON' : undefined;
+          };
+          const overrides: ContextOverrides = {
+            channel: mFlag('--channel'),
+            tld: mFlag('--tld'),
+            market: mFlag('--market'),
+            locale: mFlag('--locale'),
+            accountName: mFlag('--store-account'),
+            environment: mFlag('--environment') as ContextOverrides['environment'],
+          };
+
+          if (sub === '' || sub === 'help') {
+            logText('');
+            logText('  Merchant commands (Merchant API · GraphQL)');
+            logText('');
+            logText('  /merchant config [set ...]        Show/set storefront context (per api-key profile)');
+            logText('  /merchant product search [text]   Search products for sale  [--category --brand --take]');
+            logText('  /merchant product <id|term>       Product detail');
+            logText('  /merchant categories | brands     Catalog for filtering by alias');
+            logText('  /merchant cart create             Create a cart');
+            logText('  /merchant cart get <id>           Show a cart');
+            logText('  /merchant cart add <id> --sku <s> [--qty N]');
+            logText('  /merchant cart update <id> --item <i> --qty N');
+            logText('  /merchant cart remove <id> --item <i>');
+            logText('  /merchant cart promo <id> <code>');
+            logText('  /merchant token <cartId> [--url]  Checkout token (--url = full checkout link)');
+            logText('      [--success/--cancel/--terms/--privacy <url>] [--payment <id>] [--branding <json>]');
+            logText('');
+            logDim('  Requires /apikey set + /merchant config set --channel <c> --tld <t> --market <m> --locale <l> --store-account <slug>');
+            logDim('  Persist checkout defaults: /merchant config set --success <url> --terms <url> --default-payment <id> ...');
+            logText('');
+            break;
+          }
+
+          if (sub === 'config') {
+            if (subArgs[0]?.toLowerCase() === 'set') {
+              const ctxPatch = Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined));
+              const cur = await loadCredentials();
+              const urls = mRedirects();
+              const branding = mJsonFlag('--branding') as CheckoutBranding | undefined;
+              const dp = mFlag('--default-payment');
+              const ds = mFlag('--default-shipping');
+              const ct = mCustomerType();
+              const hasCheckout = !!(urls || branding || dp || ds || ct);
+              let checkout: StoredCheckoutDefaults | undefined;
+              if (hasCheckout) {
+                checkout = { ...(cur?.checkout ?? {}) };
+                if (urls) checkout.redirectUrls = { ...cur?.checkout?.redirectUrls, ...urls };
+                if (branding) checkout.branding = branding as StoredCheckoutDefaults['branding'];
+                if (dp) checkout.defaultPaymentId = Number(dp);
+                if (ds) checkout.defaultShippingId = Number(ds);
+                if (ct) checkout.customerType = ct;
+              }
+              const patch = { ...ctxPatch, ...(hasCheckout ? { checkout } : {}) };
+              if (Object.keys(patch).length === 0) {
+                logError('  Usage: /merchant config set [--channel <c>] [--tld <t>] [--market <m>] [--locale <l>] [--store-account <slug>] [--environment prod|qa|dev]');
+                logDim('  checkout defaults: [--success/--cancel/--continue/--terms/--privacy <url>] [--default-payment <id>] [--default-shipping <id>] [--customer-type person|organization] [--branding <json>]');
+                break;
+              }
+              const name = await updateActiveCredentials(patch);
+              if (!name) { logError('  No active api-key profile. Run /apikey add first.'); break; }
+              logSuccess(`  ✓ Merchant context saved on '${name}'.`);
+            }
+            const ctx = await resolveMerchantContext(overrides);
+            logText(`  account-name: ${ctx.accountName ?? '(unset)'}`);
+            logText(`  channel/tld:  ${ctx.channel ?? '(unset)'} / ${ctx.tld ?? '(unset)'}`);
+            logText(`  market:       ${ctx.market ?? '(unset)'}`);
+            logText(`  locale:       ${ctx.locale ?? '(unset)'}`);
+            logText(`  environment:  ${ctx.environment}`);
+            const cd = ctx.checkoutDefaults;
+            if (cd && Object.keys(cd).length > 0) {
+              logText('  checkout defaults:');
+              if (cd.defaultPaymentId != null) logText(`    payment:  ${cd.defaultPaymentId}`);
+              if (cd.defaultShippingId != null) logText(`    shipping: ${cd.defaultShippingId}`);
+              if (cd.customerType) logText(`    customer: ${cd.customerType}`);
+              for (const [k, v] of Object.entries(cd.redirectUrls ?? {})) logText(`    ${k}: ${v}`);
+              if (cd.branding) logText(`    branding: ${JSON.stringify(cd.branding)}`);
+            }
+            break;
+          }
+
+          // `token parse` is pure offline decoding — no credentials/context needed.
+          if (sub === 'token' && subArgs[0]?.toLowerCase() === 'parse') {
+            if (!subArgs[1]) { logError('  Usage: /merchant token parse <token>'); break; }
+            logText(`  ${JSON.stringify(parseCheckoutToken(subArgs[1]), null, 2)}`);
+            break;
+          }
+
+          appState.setLiveComponent(
+            <Box key="merchant-spinner" gap={1} paddingX={1}>
+              <Spinner type="dots" />
+              <Text dimColor>Querying Merchant API...</Text>
+            </Box>,
+          );
+          try {
+            const ctx = await resolveMerchantContext(overrides);
+            switch (sub) {
+              case 'product': {
+                if (subArgs[0]?.toLowerCase() === 'search') {
+                  const term = subArgs.slice(1).find((a) => !a.startsWith('--'));
+                  const result = await searchProducts(
+                    {
+                      searchText: term,
+                      categoryAlias: mFlag('--category'),
+                      brandAlias: mFlag('--brand'),
+                      take: mFlag('--take') ? Number(mFlag('--take')) : undefined,
+                      skip: mFlag('--skip') ? Number(mFlag('--skip')) : undefined,
+                    },
+                    ctx,
+                  );
+                  appState.setLiveComponent(null);
+                  for (const p of result.products ?? []) logText(`  ${productLine(p)}`);
+                  if (result.count !== undefined) logDim(`  ${result.count} products`);
+                } else {
+                  const idOrTerm = subArgs[0];
+                  if (!idOrTerm) { appState.setLiveComponent(null); logError('  Usage: /merchant product <id|term> | /merchant product search [text]'); break; }
+                  const product = await getMerchantProduct(idOrTerm, ctx);
+                  appState.setLiveComponent(null);
+                  if (!product) { logDim('  No product found.'); break; }
+                  logText(`  ${productLine(product)}`);
+                  if (product.alias) logDim(`  ${product.alias}`);
+                }
+                break;
+              }
+              case 'categories':
+              case 'category': {
+                const cats = await listMerchantCategories();
+                appState.setLiveComponent(null);
+                for (const c of cats) logText(`  ${c.name ?? ''}${c.alias ? `  (${c.alias})` : ''}`);
+                logDim(`  ${cats.length} categories`);
+                break;
+              }
+              case 'brands':
+              case 'brand': {
+                const brands = await listMerchantBrands();
+                appState.setLiveComponent(null);
+                for (const b of brands) logText(`  ${b.name ?? ''}${b.alias ? `  (${b.alias})` : ''}`);
+                logDim(`  ${brands.length} brands`);
+                break;
+              }
+              case 'cart': {
+                const action = subArgs[0]?.toLowerCase() ?? '';
+                let cart;
+                if (action === 'create') {
+                  cart = await createCart(ctx);
+                  appState.setLiveComponent(null);
+                  logSuccess(`  ✓ Cart created`);
+                  logText(`  ${cart.id}`);
+                  break;
+                } else if (action === 'get') {
+                  if (!subArgs[1]) { appState.setLiveComponent(null); logError('  Usage: /merchant cart get <id>'); break; }
+                  cart = await getCart(subArgs[1], ctx);
+                } else if (action === 'add') {
+                  const id = subArgs[1]; const sku = mFlag('--sku');
+                  if (!id || !sku) { appState.setLiveComponent(null); logError('  Usage: /merchant cart add <id> --sku <skuId> [--qty N]'); break; }
+                  cart = await addToCart(id, { skuId: Number(sku), quantity: mFlag('--qty') ? Number(mFlag('--qty')) : 1 }, ctx);
+                } else if (action === 'update') {
+                  const id = subArgs[1]; const item = mFlag('--item'); const qty = mFlag('--qty');
+                  if (!id || !item || qty === undefined) { appState.setLiveComponent(null); logError('  Usage: /merchant cart update <id> --item <itemId> --qty <n>'); break; }
+                  cart = await updateCartItem(id, { id: item, quantity: Number(qty) }, ctx);
+                } else if (action === 'remove') {
+                  const id = subArgs[1]; const item = mFlag('--item');
+                  if (!id || !item) { appState.setLiveComponent(null); logError('  Usage: /merchant cart remove <id> --item <itemId>'); break; }
+                  cart = await removeFromCart(id, item, ctx);
+                } else if (action === 'promo') {
+                  const id = subArgs[1]; const code = subArgs[2];
+                  if (!id || !code) { appState.setLiveComponent(null); logError('  Usage: /merchant cart promo <id> <code>'); break; }
+                  cart = await setCartPromoCode(id, code, ctx);
+                } else {
+                  appState.setLiveComponent(null);
+                  logError('  Usage: /merchant cart [create | get <id> | add <id> --sku <s> | update <id> --item <i> --qty N | remove <id> --item <i> | promo <id> <code>]');
+                  break;
+                }
+                appState.setLiveComponent(null);
+                for (const line of cartLines(cart)) logText(`  ${line}`);
+                break;
+              }
+              case 'token': {
+                // `token parse` is handled earlier (offline, no context).
+                appState.setLiveComponent(null);
+                const cartId = subArgs[0];
+                if (!cartId) { logError('  Usage: /merchant token <cartId> [--url] [--success <url>] [--payment <id>] ...'); break; }
+                const opts: CheckoutTokenOptions = {
+                  cartId,
+                  selectedPaymentMethodId: mFlag('--payment') ? Number(mFlag('--payment')) : undefined,
+                  selectedShippingMethodId: mFlag('--shipping') ? Number(mFlag('--shipping')) : undefined,
+                  availablePaymentMethodIds: mIntList('--available-payments'),
+                  availableShippingMethodIds: mIntList('--available-shipping'),
+                  customerType: mCustomerType(),
+                  isCartEditable: args.includes('--editable') ? true : undefined,
+                  copyCart: args.includes('--no-copy') ? false : undefined,
+                  redirectUrls: mRedirects(),
+                  branding: mJsonFlag('--branding') as CheckoutBranding | undefined,
+                  user: mJsonFlag('--user') as Record<string, unknown> | undefined,
+                };
+                const token = buildCheckoutToken(opts, ctx);
+                logSuccess('  ✓ Checkout token');
+                if (args.includes('--url')) logText(`  https://checkout.geins.services/${token}`);
+                else logText(`  ${token}`);
+                break;
+              }
+              default:
+                appState.setLiveComponent(null);
+                logError(`  Unknown subcommand: merchant ${sub}`);
+                logDim('  Type /merchant help for available commands');
+            }
+          } catch (err) {
+            appState.setLiveComponent(null);
+            logError(`  ${formatError(err)}`);
           }
           break;
         }

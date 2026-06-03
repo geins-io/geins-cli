@@ -151,8 +151,27 @@ function unwrap<T>(res: unknown): T {
 }
 
 /**
+ * All order statuses that are safe to query. `/API/Order/Statuses` also advertises `inactive`
+ * and `pending`, but querying either (alone or in a list) makes the backend return
+ * 500 "A database error occured." — verified live 2026-06. They're deliberately excluded.
+ */
+export const QUERYABLE_ORDER_STATUSES = [
+  'cancelled',
+  'on-hold',
+  'refunded',
+  'partial',
+  'backorder',
+  'completed',
+] as const;
+
+/**
  * POST /API/Order/Query (or /Query/{page} for paging beyond the first page).
  * The paged endpoint returns PageResult (incl. BatchId); pages > 1 need BatchId in the body.
+ *
+ * Both endpoints 500 ("A database error occured.") unless the query has a primary predicate —
+ * a `StatusList` or `CustomerId`. An empty body, or one with only secondary filters (date,
+ * `MarketId`, `Email`), errors server-side. So when the caller supplies neither, we default
+ * `StatusList` to every queryable status, which makes an unfiltered `order list` "just work".
  */
 export async function queryOrders(
   query: OrderQuery = {},
@@ -160,10 +179,14 @@ export async function queryOrders(
 ): Promise<QueryOrdersResult> {
   const page = options?.page;
   const path = page != null ? `/API/Order/Query/${page}` : '/API/Order/Query';
+  const body: OrderQuery =
+    query.StatusList || query.CustomerId != null
+      ? query
+      : { ...query, StatusList: QUERYABLE_ORDER_STATUSES.join(',') };
   // The plain endpoint returns a raw Order[]; the paged endpoint returns a PagedEnvelope.
   const res = await mgmtRequest<Order[] | PagedEnvelope<Order[]>>(path, {
     method: 'POST',
-    body: query,
+    body,
   });
   if (Array.isArray(res)) return { orders: res };
   return { orders: res.Resource ?? [], page: res.PageResult };

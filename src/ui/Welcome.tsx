@@ -134,8 +134,10 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
         paddingX={1}
         paddingY={1}
       >
-        <Text>Welcome to <Text bold color="cyan">Geins Synapse</Text> — commerce at the speed of the command line.</Text>
-        <Text> </Text>
+         <Text>👋 Hello World!</Text>
+         <Text> </Text>
+         <Text>Welcome to <Text bold color="cyan">Geins Synapse</Text> — Your gateway to agentic commerce at the speed of the command line.</Text>
+         <Text> </Text>
         <Text>2026 is the year agents run the store. Synapse makes your catalog,</Text>
         <Text>orders, and workflows agent-ready — structured, scriptable, and live.</Text>
         <Text> </Text>
@@ -156,8 +158,7 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
         </Box>
       ) : null}
       
-      <Box marginTop={1} flexDirection="column">
-        <Text color="">ℹ Hello World! Welcome to Geins Synapse - Your Central Nervous System of Commerce.</Text>
+      <Box marginTop={1} flexDirection="column">        
         <Text color="">ℹ Switch to <Text color="magenta">copilot</Text> mode with <Text color="magenta">/copilot</Text> or shift tab.</Text>
       </Box>
 

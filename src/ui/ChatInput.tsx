@@ -3,6 +3,7 @@ import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { existsSync } from 'node:fs';
 import { loadCredentialsStore } from '../config/store';
+import { listWorkflows } from '../commands/workflows';
 
 const COMMANDS: Record<string, string> = {
   help: 'Show available commands',
@@ -14,6 +15,7 @@ const COMMANDS: Record<string, string> = {
   workflow: 'Workflow commands',
   product: 'Product commands',
   order: 'Order commands',
+  campaign: 'Campaign commands',
   copilot: 'Toggle AI copilot mode',
   provider: 'Switch copilot provider',
   new: 'New conversation',
@@ -31,6 +33,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
   product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'categories', 'relation-types', 'relations', 'parameters', 'help'],
   order: ['list', 'get', 'query', 'count', 'statuses', 'create', 'validate', 'status', 'update', 'cancel-row', 'comment', 'transaction', 'set-paid', 'delete', 'help'],
+  campaign: ['list', 'get', 'types', 'create', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   output: ['status', 'off'],
   copilot: ['provider', 'set'],
@@ -56,9 +59,9 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     remove: '<name>',
   },
   product: {
-    get: '<id>',
-    list: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
-    query: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>]',
+    get: '<id> [--include <fields>]',
+    list: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>] [--include <fields>]',
+    query: '[--brand <id>] [--category <id>] [--article <n>] [--sellable] [--in-stock] [--page <n>] [--include <fields>]',
     items: '<productId>',
     variants: '<productId> | create | labels [add|remove|rename]',
     images: '<productId> | add <id> <file|url> | delete | set-primary | reorder',
@@ -82,6 +85,11 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     transaction: '<id> <transactionId>',
     'set-paid': '<paymentDetailId>',
     delete: '<id>',
+  },
+  campaign: {
+    get: '<id>',
+    types: '(discount type ids — 3=Percentage, 4=Fixed amount)',
+    create: "--promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <c>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer] | --body '<json>'",
   },
   api: {
     GET: '<path>',
@@ -151,6 +159,11 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   const [apiKeyNames, setApiKeyNames] = useState<string[] | null>(null);
   const [apiKeyActive, setApiKeyActive] = useState<string | null>(null);
   const [apiKeyIndex, setApiKeyIndex] = useState(0);
+  // Inline workflow picker: shown under the input when the command is `/workflow run` (with no
+  // id yet, or with an id this picker put there). Arrows step through workflows and rewrite the
+  // input to `/workflow run <id>`; enter submits it. `null` = not loaded / not in picker.
+  const [workflows, setWorkflows] = useState<Array<{ id: string; name: string }> | null>(null);
+  const [workflowIndex, setWorkflowIndex] = useState(0);
 
   // Commands offerable right now (`/new` and `/provider` only make sense once a copilot is active).
   const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new' && c !== 'provider');
@@ -167,6 +180,12 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   // key picker. A trailing space or any subcommand text drops out of this and restores hints.
   const apiKeyIntent = value.toLowerCase() === '/apikey';
   const inApiKeyPicker = apiKeyIntent && apiKeyNames !== null && apiKeyNames.length > 0;
+
+  // `/workflow run`, optionally followed by a single id token (no flags) → offer the picker.
+  // The captured token is whatever the picker has placed into the input so far.
+  const workflowRunMatch = /^\/workflow\s+run(?:\s+([^\s-]\S*))?\s*$/i.exec(value.trimStart());
+  const workflowRunIntent = workflowRunMatch !== null;
+  const inWorkflowPicker = workflowRunIntent && workflows !== null && workflows.length > 0;
 
   // Load the saved profiles whenever the picker is invoked; clear them when it isn't.
   useEffect(() => {
@@ -192,6 +211,33 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyIntent]);
 
+  // Load workflows whenever the `/workflow run` picker is invoked; clear them when it isn't.
+  // Keyed on the intent boolean so rewriting the id into the input doesn't trigger a reload.
+  useEffect(() => {
+    if (!workflowRunIntent) {
+      if (workflows !== null) setWorkflows(null);
+      return;
+    }
+    let cancelled = false;
+    listWorkflows()
+      .then(data => {
+        if (cancelled) return;
+        const items = data.items.map(w => ({ id: w.id, name: w.name }));
+        setWorkflows(items);
+        // Align the highlight with any id already present in the input.
+        const existing = workflowRunMatch?.[1];
+        const idx = existing ? items.findIndex(w => w.id === existing) : -1;
+        setWorkflowIndex(idx >= 0 ? idx : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setWorkflows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowRunIntent]);
+
   useInput((input, key) => {
     // While an operation is in flight, Ctrl-C is reserved for cancelling it — App's
     // handler aborts the running command; don't also clear/exit here.
@@ -212,6 +258,24 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
     if (disabled) {
       if (key.escape && onCancel) onCancel();
       return;
+    }
+    // Inline workflow picker takes the arrows first; each step rewrites the input to
+    // `/workflow run <id>` so the field always reflects what enter will submit.
+    if (inWorkflowPicker) {
+      const count = workflows!.length;
+      const step = (next: number) => {
+        setWorkflowIndex(next);
+        setValue(`/workflow run ${workflows![next]!.id}`);
+        setInputKey(k => k + 1);
+      };
+      if (key.upArrow) {
+        step(workflowIndex <= 0 ? count - 1 : workflowIndex - 1);
+        return;
+      }
+      if (key.downArrow) {
+        step(workflowIndex >= count - 1 ? 0 : workflowIndex + 1);
+        return;
+      }
     }
     // Inline API-key picker takes the arrows first; enter is handled by handleSubmit.
     if (inApiKeyPicker) {
@@ -341,6 +405,20 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   };
 
   const handleSubmit = (input: string) => {
+    // In the inline workflow picker, enter runs the highlighted workflow (covers the case where
+    // the user pressed enter without arrowing, so no id is in the input yet).
+    if (inWorkflowPicker) {
+      const id = workflows![workflowIndex]?.id ?? workflows![0]!.id;
+      onSubmit(`/workflow run ${id}`);
+      setValue('');
+      prevValueRef.current = '';
+      setHistoryIndex(-1);
+      setShowMenu(false);
+      setMenuIndex(0);
+      setCycleAll(false);
+      setWorkflows(null);
+      return;
+    }
     // In the inline key picker, enter switches to the highlighted profile. Reuse the existing
     // `/apikey use <name>` command path so the switch + cache reset + logging stay in one place.
     if (inApiKeyPicker) {
@@ -416,7 +494,7 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
         ) : (
           <TextInput key={inputKey} value={value} onChange={handleChange} onSubmit={handleSubmit} />
         )}
-        {hints && <Text dimColor>  {hints}</Text>}
+        {hints && !workflowRunIntent && <Text dimColor>  {hints}</Text>}
       </Box>
       <Text dimColor>{separator}</Text>
       {menuVisible ? (
@@ -430,6 +508,43 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
                 <Text dimColor>{COMMANDS[cmd]}</Text>
               </Box>
             ))}
+          </Box>
+          <Text dimColor>{separator}</Text>
+        </>
+      ) : null}
+      {workflowRunIntent ? (
+        <>
+          <Box flexDirection="column" paddingX={1}>
+            {workflows === null ? (
+              <Text dimColor>Loading workflows…</Text>
+            ) : workflows.length === 0 ? (
+              <Text dimColor>No workflows — /workflow create to add one</Text>
+            ) : (
+              <>
+                <Text dimColor>↑↓ select · enter run</Text>
+                {(() => {
+                  const MAX = 8;
+                  let start = 0;
+                  if (workflows.length > MAX) {
+                    start = Math.max(0, Math.min(workflowIndex - Math.floor(MAX / 2), workflows.length - MAX));
+                  }
+                  return workflows.slice(start, start + MAX).map((wf, i) => {
+                    const globalIdx = start + i;
+                    const isSel = globalIdx === workflowIndex;
+                    return (
+                      <Box key={wf.id} gap={1}>
+                        <Text color={isSel ? 'cyan' : undefined} bold={isSel}>{isSel ? '▸' : ' '}</Text>
+                        <Text color={isSel ? 'cyan' : undefined} bold={isSel}>{wf.name}</Text>
+                        <Text dimColor>{wf.id}</Text>
+                      </Box>
+                    );
+                  });
+                })()}
+                {workflows.length > 8 ? (
+                  <Text dimColor>{workflowIndex + 1}/{workflows.length}</Text>
+                ) : null}
+              </>
+            )}
           </Box>
           <Text dimColor>{separator}</Text>
         </>

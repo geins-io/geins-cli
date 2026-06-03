@@ -1,14 +1,14 @@
 import React from 'react';
 import { render } from 'ink';
 import { App } from './ui/App.tsx';
-import { loadConfig, saveConfig, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from './config/store.ts';
+import { loadConfig, saveConfig, addCredentials, loadCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, updateActiveCredentials, type ApiCredentials, type StoredCheckoutDefaults } from './config/store.ts';
 import { setOutputDir, getOutputDir } from './output/sink.ts';
 import { request, setAccountKeyOverride } from './api/client.ts';
 import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, createProduct, updateProduct, type ProductWrite, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { cliHelpSpec } from './help.ts';
 import {
@@ -45,7 +45,38 @@ import {
   parseOrderListArgs,
   type OrderUpdate,
 } from './commands/orders.ts';
+import {
+  listCampaigns,
+  getCampaignTypes,
+  getCampaign,
+  createCampaign,
+  buildPromoCodeCampaign,
+  campaignLabel,
+  type CampaignWrite,
+} from './commands/campaigns.ts';
 import { listMarkets, listLanguages, listChannels, listLocales, marketName, listUserAccounts } from './commands/account.ts';
+import {
+  resolveMerchantContext,
+  searchProducts,
+  getProduct as getMerchantProduct,
+  listCategories as listMerchantCategories,
+  listBrands as listMerchantBrands,
+  createCart,
+  getCart,
+  addToCart,
+  updateCartItem,
+  removeFromCart,
+  setCartPromoCode,
+  buildCheckoutToken,
+  parseCheckoutToken,
+  productLine,
+  cartLines,
+  type ContextOverrides,
+  type CheckoutTokenOptions,
+  type CheckoutRedirects,
+  type CheckoutBranding,
+  type CustomerType,
+} from './commands/merchant.ts';
 import { applyMemoryAccount } from './memory/index.ts';
 import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
 import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
@@ -59,6 +90,8 @@ const PRODUCT_HELP = [
   '',
   'Subcommands:',
   '  get <id> [--idtype <0-3>] [--json]        Show one product (id is the internal id by default)',
+  '  create [flags | --file|--body|stdin]      Create a product (see "create" below)',
+  '  update <id> [--idtype <0-3>] [--file|--body|stdin]   Partial update (PUT; merges supplied fields)',
   '  list [filters] [--json]                   Query products (alias: query); defaults to page 1',
   '  items <id> [--idtype <0-3>] [--json]      List a product\'s items (SKUs of one product)',
   '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
@@ -98,6 +131,22 @@ const PRODUCT_HELP = [
   '  batch update/replace body: { "values": [ { "ProductId", "ParameterId", "Value", "LocalizedDescriptions"? } ] }',
   '  batch remove body:         { "assignments": [ { "ProductId", "ParameterId" } ] }',
   '',
+  'create — create a product (convenience flags, or a full JSON body):',
+  '  --article <s>                 Article number',
+  '  --name <code>:<text>          Localized name (repeatable, e.g. en:"My Product")',
+  '  --active / --inactive         Set Active (default: API default)',
+  '  --brand <id>                  BrandId',
+  '  --supplier <id>               SupplierId',
+  '  --price <n> --currency <c>    Purchase price + currency',
+  '  --category <id>               CategoryId (repeatable)',
+  '  --vat <n>                     Vat',
+  '  --external-id <s>             ExternalId',
+  '  --file <path> | --body <json> | stdin   Full Product.Models.Write.Product body',
+  '  --json                        Output the created product as JSON',
+  '',
+  'update <id> — partial update; supply only the fields to change as JSON:',
+  '  --file <path> | --body <json> | stdin   e.g. { "Active": false, "BrandId": 7 }',
+  '',
   'variants create — group existing products as variants of each other:',
   '  --name <name>                 Optional group name',
   '  --label <name>                Declared dimension (repeatable); omit to derive from products',
@@ -122,11 +171,16 @@ const PRODUCT_HELP = [
   '  --in-stock                   Only in-stock products',
   '  --page <n>                   Page number (page size 1000)',
   '  --batch <id>                 BatchId from a prior page (required for page > 1)',
-  '  --include <fields>           Child collections, e.g. Names,Prices,Categories',
+  '  --include <fields>           Child collections, comma-separated (default Names). "" = basic data only,',
+  '                               null/omit = no product data. Valid: Names, ShortTexts, LongTexts, TechTexts,',
+  '                               Items, Prices, Categories, Parameters, Variants, Markets, Images, Feeds, Urls,',
+  '                               ShippingFees, RelatedProducts, DiscountCampaigns, LowestPrice',
   '  --json                       Raw JSON output',
   '',
   'Examples:',
   '  geins product get 10001 --json',
+  '  geins product create --article TEST-001 --name en:"Test Product" --active',
+  '  geins product update 10001 --body \'{"Active":false}\'',
   '  geins product items 10001',
   '  geins product variants 10001',
   '  geins product images 10001',
@@ -198,6 +252,39 @@ const ORDER_HELP = [
   '  cat order.json | geins order create',
 ].join('\n');
 
+const CAMPAIGN_HELP = [
+  'geins campaign — manage campaigns (Management API)',
+  '',
+  'Subcommands:',
+  '  list [--json]                             List campaigns',
+  '  types [--json]                            List discount type ids (e.g. 3=Percentage, 4=Fixed amount)',
+  '  get <id> [--json]                         One campaign in full',
+  '  create [flags | --file|--body|stdin]      Create a campaign (see "create" below)',
+  '',
+  'create — promocode campaign flags:',
+  '  --promocode <CODE>           The discount code (required for flag mode)',
+  '  --market <id>                Market id (required; see `geins account markets`)',
+  '  --percentage <n>             Percentage discount (CampaignTypeId 3)',
+  '  --amount <CUR>:<n>           Fixed-amount discount per currency (CampaignTypeId 4); repeatable',
+  '  --title <text>               Localized title (pair with --lang)',
+  '  --lang <code>                Language code for --title (default: en)',
+  '  --from <ISO8601>             Valid from (default: now)',
+  '  --to <ISO8601>               Valid to',
+  '  --usage-limit <n>            Max total redemptions',
+  '  --once-per-customer          Limit to one redemption per customer',
+  '  --priority <n>               Campaign priority',
+  '  --enabled / --disabled       Enabled state (default: enabled)',
+  '  --file <path> | --body \'<json>\' | stdin   Full CampaignDetailItemBase body (escape hatch)',
+  '  --json                       Raw JSON output',
+  '',
+  'Examples:',
+  '  geins campaign types',
+  '  geins campaign list --json',
+  '  geins campaign create --promocode SUMMER10 --percentage 10 --market 1 --title "Summer" --lang sv',
+  '  geins campaign create --promocode FIX50 --amount SEK:50 --market 1',
+  '  cat campaign.json | geins campaign create',
+].join('\n');
+
 const ACCOUNT_HELP = [
   'geins account — show account settings (v2 Account API)',
   '',
@@ -217,6 +304,67 @@ const ACCOUNT_HELP = [
   '  geins workflow list --account-name labs        # run against the "labs" v2 account',
   '  geins account markets --account-name demogeins --json',
   '  geins product get 10001 --account prod-labs    # live API, by apikey profile',
+].join('\n');
+
+const MERCHANT_HELP = [
+  'geins merchant — storefront data via the Merchant API (GraphQL)',
+  '',
+  'Shows what a customer sees: products for sale in a sales channel, carts, and checkout.',
+  'Requires an api-key profile (geins apikey set ...) and a merchant context',
+  '(geins merchant config set ...). Channel/market/locale resolve per field as:',
+  'flag → GEINS_* env (GEINS_CHANNEL/GEINS_TLD/GEINS_MARKET/GEINS_LOCALE/GEINS_MERCHANT_ACCOUNT)',
+  '→ value stored on the active profile.',
+  '',
+  'Products:',
+  '  product search [text] [--category <alias>] [--brand <alias>] [--take N] [--skip N] [--json]',
+  '  product <productId|term> [--json]      Full detail for one product',
+  '',
+  'Catalog:',
+  '  categories [--json]                    List categories (id · name · alias)',
+  '  brands [--json]                        List brands (id · name · alias)',
+  '',
+  'Cart:',
+  '  cart create                            Create a cart, prints its id',
+  '  cart get <id>                          Show a cart and its total',
+  '  cart add <id> --sku <skuId> [--qty N]  Add an item',
+  '  cart update <id> --item <itemId> --qty N   Change an item quantity',
+  '  cart remove <id> --item <itemId>       Remove an item',
+  '  cart promo <id> <code>                 Apply a promotion code',
+  '',
+  'Checkout:',
+  '  token <cartId> [options]               Generate a checkout token from a cart',
+  '    --url                                Print the full https://checkout.geins.services/<token> link',
+  '    --payment <id> / --shipping <id>     Preselect a payment/shipping method',
+  '    --available-payments <csv>           Restrict selectable payment method ids (e.g. 18,23)',
+  '    --available-shipping <csv>           Restrict selectable shipping method ids',
+  '    --customer-type person|organization  Customer type (default person)',
+  '    --editable / --no-copy               Allow cart editing / do not copy the cart',
+  '    --success/--cancel/--continue/--terms/--privacy <url>   Redirect URLs',
+  '    --branding <json|@file>              Branding { title, icon, logo, styles:{...} }',
+  '    --user <json|@file>                  Logged-in user object',
+  '  token parse <token>                    Decode a token payload (debug, offline)',
+  '',
+  'Config (per api-key profile):',
+  '  config                                 Show the resolved context + checkout defaults',
+  '  config set [--channel <c>] [--tld <t>] [--market <m>] [--locale <l>]',
+  '             [--store-account <slug>] [--environment prod|qa|dev]',
+  '             [--success/--cancel/--continue/--terms/--privacy <url>]',
+  '             [--default-payment <id>] [--default-shipping <id>]',
+  '             [--customer-type person|organization] [--branding <json|@file>]',
+  '             Persist context + default checkout settings baked into every token.',
+  '',
+  'The success URL automatically gets Geins params appended',
+  '(?geins-cart={geins.cartid}&geins-pm=…&geins-pt=…&geins-uid=…) so your',
+  'confirmation page receives the order. Redirect URLs/branding are stable per',
+  'storefront — set them once with `config set`; per-token flags override.',
+  '',
+  'Examples:',
+  '  geins merchant config set --channel 1 --tld se --market se --locale sv-SE --store-account labs',
+  '  geins merchant config set --success https://shop.com/thanks --terms https://shop.com/terms',
+  '  geins merchant product search shoe --take 5 --json',
+  '  CART=$(geins merchant cart create)',
+  '  geins merchant cart add $CART --sku 123 --qty 2',
+  '  geins merchant token $CART --url',
 ].join('\n');
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
@@ -363,6 +511,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
     console.log('  product    Product commands (get, list, items, variants, images, relations, parameters) — uses Management API');
     console.log('  order      Order commands (list, get, count, statuses, create, status, update, comment) — uses Management API');
+    console.log('  campaign   Campaign commands (list, get, types, create — incl. promocode) — uses Management API');
+    console.log('  merchant   Storefront commands (product search, cart, checkout token) — uses Merchant API (GraphQL)');
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped');
     console.log('  ask       Ask the copilot a question (-c/--continue to keep the prior conversation)');
@@ -391,7 +541,9 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   if (commandArgs.includes('--help')) {
     if (commandName === 'product') console.log(PRODUCT_HELP);
     else if (commandName === 'order') console.log(ORDER_HELP);
+    else if (commandName === 'campaign') console.log(CAMPAIGN_HELP);
     else if (commandName === 'account') console.log(ACCOUNT_HELP);
+    else if (commandName === 'merchant') console.log(MERCHANT_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -776,6 +928,67 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               if (product.MainCategoryId != null) console.log(`  Category: ${product.MainCategoryId}`);
               if (product.DateUpdated) console.log(`  Updated: ${product.DateUpdated}`);
             }
+            break;
+          }
+          case 'create': {
+            const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
+            const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+            const collect = (flag: string) => subArgs.flatMap((a, i) => (subArgs[i - 1] === flag ? [a] : []));
+            const parseLoc = (flag: string): LocalizableContent[] | undefined => {
+              const parts = collect(flag);
+              if (parts.length === 0) return undefined;
+              return parts.map((p) => { const c = p.indexOf(':'); return { LanguageCode: c === -1 ? p : p.slice(0, c), Content: c === -1 ? '' : p.slice(c + 1) }; });
+            };
+
+            // Full JSON body via --file/--body/stdin, otherwise build from convenience flags.
+            const hasBody = subArgs.includes('--file') || subArgs.includes('--body');
+            const hasFlags = subArgs.includes('--article') || subArgs.includes('--name');
+            let input: ProductWrite;
+            if (hasBody || (!hasFlags && !process.stdin.isTTY)) {
+              input = (await resolveBody(subArgs)) as ProductWrite;
+            } else if (hasFlags) {
+              const names = parseLoc('--name');
+              input = {
+                ArticleNumber: flagVal('--article'),
+                Names: names,
+                Active: subArgs.includes('--active') ? true : subArgs.includes('--inactive') ? false : undefined,
+                BrandId: numFlag('--brand'),
+                SupplierId: numFlag('--supplier'),
+                PurchasePrice: numFlag('--price'),
+                PurchasePriceCurrency: flagVal('--currency'),
+                CategoryIds: collect('--category').map(Number).filter((n) => !Number.isNaN(n)),
+                ExternalId: flagVal('--external-id'),
+                Vat: numFlag('--vat'),
+              };
+              if (!input.CategoryIds?.length) delete input.CategoryIds;
+            } else {
+              console.error("Usage: geins product create --article <s> --name <code>:<text> [--active] [--brand <id>] [--supplier <id>] [--price <n>] [--currency <c>] [--category <id>]... [--vat <n>] [--external-id <s>]\n       geins product create [--file <path> | --body '<json>' | stdin]");
+              process.exit(1);
+            }
+
+            const product = await createProduct(input);
+            if (jsonMode) { console.log(JSON.stringify(product, null, 2)); break; }
+            console.log(`✓ Created product ${productName(product)}  (${product.ProductId})`);
+            if (product.ArticleNumber) console.log(`  Article: ${product.ArticleNumber}`);
+            console.log(`  Active: ${product.Active ? 'yes' : 'no'}`);
+            break;
+          }
+          case 'update': {
+            const id = subArgs[0];
+            if (!id) {
+              console.error("Usage: geins product update <id> [--idtype <0-3>] [--file <path> | --body '<json>' | stdin]");
+              process.exit(1);
+            }
+            let idType: ProductIdType | undefined;
+            const itIdx = subArgs.indexOf('--idtype');
+            if (itIdx !== -1 && subArgs[itIdx + 1] != null) {
+              const n = Number(subArgs[itIdx + 1]);
+              if (n >= 0 && n <= 3) idType = n as ProductIdType;
+            }
+            const changes = (await resolveBody(subArgs.slice(1))) as ProductWrite;
+            const product = await updateProduct(id, changes, { idType });
+            if (jsonMode) { console.log(JSON.stringify(product, null, 2)); break; }
+            console.log(`✓ Updated product ${productName(product)}  (${product.ProductId})`);
             break;
           }
           case 'items': {
@@ -1524,8 +1737,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           case 'list':
           case 'query': {
             const { query, page, json } = parseOrderListArgs(subArgs);
-            // The plain /Query endpoint accepts an empty body; the paged /Query/{page}
-            // endpoint 500s on some accounts unless filtered, so only page when asked.
+            // Both Query endpoints 500 ("A database error occured.") without a StatusList or
+            // CustomerId predicate, so queryOrders defaults StatusList to all queryable statuses.
             const result = await queryOrders(query, { page });
             if (json) { console.log(JSON.stringify(result, null, 2)); break; }
             if (result.orders.length === 0) { console.log('No orders found.'); break; }
@@ -1654,6 +1867,380 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           default:
             console.error(`Unknown subcommand: order ${sub}\n`);
             console.error(ORDER_HELP);
+            process.exit(1);
+        }
+        break;
+      }
+      case 'campaign': {
+        const sub = commandArgs[0]?.toLowerCase() ?? 'list';
+        const subArgs = commandArgs.slice(1);
+        const jsonMode = commandArgs.includes('--json');
+
+        switch (sub) {
+          case 'list': {
+            const campaigns = await listCampaigns();
+            if (jsonMode) { console.log(JSON.stringify(campaigns, null, 2)); break; }
+            if (campaigns.length === 0) { console.log('No campaigns.'); break; }
+            for (const c of campaigns) {
+              const code = c.PromoCode ? `[${c.PromoCode}] ` : '';
+              const bits = [c.Type, c.CampaignBaseType, c.Status].filter(Boolean).join(' · ');
+              console.log(`${code}${c.Title ?? '(untitled)'}${bits ? `  — ${bits}` : ''}`);
+            }
+            break;
+          }
+          case 'types': {
+            const types = await getCampaignTypes();
+            if (jsonMode) { console.log(JSON.stringify(types, null, 2)); break; }
+            if (types.length === 0) { console.log('No campaign types.'); break; }
+            for (const t of types) console.log(`  ${t.Id}\t${t.Name}`);
+            break;
+          }
+          case 'get': {
+            const id = subArgs[0];
+            if (!id) { console.error('Usage: geins campaign get <id> [--json]'); process.exit(1); }
+            const c = await getCampaign(id);
+            if (jsonMode) { console.log(JSON.stringify(c, null, 2)); break; }
+            console.log(`${campaignLabel(c)}  (${c.CampaignId})`);
+            const bits = [c.Status, `base=${c.CampaignBaseType}`, `type=${c.CampaignTypeId}`].filter(Boolean).join(' · ');
+            console.log(`  ${bits}`);
+            if (c.PromoCode) console.log(`  Code: ${c.PromoCode}`);
+            if (c.PercentageValue != null) console.log(`  Discount: ${c.PercentageValue}%`);
+            if (c.Amounts && Object.keys(c.Amounts).length) {
+              console.log(`  Amounts: ${Object.entries(c.Amounts).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+            }
+            if (c.MarketId) console.log(`  Market: ${c.MarketId}`);
+            console.log(`  Valid: ${c.ValidFrom ?? '—'} → ${c.ValidTo ?? '—'}`);
+            console.log(`  Enabled: ${c.Enabled ? 'yes' : 'no'}`);
+            break;
+          }
+          case 'create': {
+            const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
+            const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+            const collect = (flag: string) => subArgs.flatMap((a, i) => (subArgs[i - 1] === flag ? [a] : []));
+
+            const hasBody = subArgs.includes('--file') || subArgs.includes('--body');
+            const hasFlags = subArgs.includes('--promocode');
+            let body: CampaignWrite;
+            if (hasBody || (!hasFlags && !process.stdin.isTTY)) {
+              body = (await resolveBody(subArgs)) as CampaignWrite;
+            } else if (hasFlags) {
+              const promoCode = flagVal('--promocode');
+              const marketId = flagVal('--market');
+              if (!promoCode || !marketId) {
+                console.error('Usage: geins campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <code>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer] [--priority <n>] [--enabled|--disabled]');
+                process.exit(1);
+              }
+              const amounts: Record<string, number> = {};
+              for (const pair of collect('--amount')) {
+                const c = pair.indexOf(':');
+                const cur = c === -1 ? pair : pair.slice(0, c);
+                const val = c === -1 ? NaN : Number(pair.slice(c + 1));
+                if (cur && !Number.isNaN(val)) amounts[cur.toUpperCase()] = val;
+              }
+              const titleText = flagVal('--title');
+              body = buildPromoCodeCampaign({
+                promoCode,
+                marketId,
+                percentage: numFlag('--percentage'),
+                amounts: Object.keys(amounts).length ? amounts : undefined,
+                title: titleText ? [{ Language: flagVal('--lang') ?? 'en', Value: titleText }] : undefined,
+                validFrom: flagVal('--from'),
+                validTo: flagVal('--to'),
+                usageLimit: numFlag('--usage-limit'),
+                oncePerCustomer: subArgs.includes('--once-per-customer') ? true : undefined,
+                priority: numFlag('--priority'),
+                enabled: subArgs.includes('--disabled') ? false : subArgs.includes('--enabled') ? true : undefined,
+              });
+            } else {
+              console.error("Usage: geins campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <code>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer] [--priority <n>] [--enabled|--disabled]\n       geins campaign create [--file <path> | --body '<json>' | stdin]");
+              process.exit(1);
+            }
+
+            const campaign = await createCampaign(body);
+            if (jsonMode) { console.log(JSON.stringify(campaign, null, 2)); break; }
+            console.log(`✓ Created campaign ${campaignLabel(campaign)}  (${campaign.CampaignId})`);
+            if (campaign.PromoCode) console.log(`  Code: ${campaign.PromoCode}`);
+            console.log(`  Enabled: ${campaign.Enabled ? 'yes' : 'no'}`);
+            break;
+          }
+          case 'help':
+            console.log(CAMPAIGN_HELP);
+            break;
+          default:
+            console.error(`Unknown subcommand: campaign ${sub}\n`);
+            console.error(CAMPAIGN_HELP);
+            process.exit(1);
+        }
+        break;
+      }
+      case 'merchant': {
+        const sub = commandArgs[0]?.toLowerCase() ?? '';
+        const subArgs = commandArgs.slice(1);
+        const jsonMode = commandArgs.includes('--json');
+
+        function flag(name: string): string | undefined {
+          const idx = commandArgs.indexOf(name);
+          return idx !== -1 ? commandArgs[idx + 1] : undefined;
+        }
+        // JSON from an inline string or @file path (for --branding / --user).
+        function jsonFlag(name: string): unknown {
+          const v = flag(name);
+          if (v === undefined) return undefined;
+          const raw = v.startsWith('@') ? readFileSync(v.slice(1), 'utf-8') : v;
+          return JSON.parse(raw);
+        }
+        function intList(name: string): number[] | undefined {
+          const v = flag(name);
+          if (!v) return undefined;
+          return v.split(',').map((x) => Number(x.trim())).filter((n) => !Number.isNaN(n));
+        }
+        function redirectsFromFlags(): CheckoutRedirects | undefined {
+          const r: CheckoutRedirects = {};
+          if (flag('--terms')) r.terms = flag('--terms');
+          if (flag('--privacy')) r.privacy = flag('--privacy');
+          if (flag('--success')) r.success = flag('--success');
+          if (flag('--cancel')) r.cancel = flag('--cancel');
+          if (flag('--continue')) r.continue = flag('--continue');
+          return Object.keys(r).length ? r : undefined;
+        }
+        function customerTypeFromFlag(): CustomerType | undefined {
+          const c = flag('--customer-type')?.toLowerCase();
+          return c === 'organization' ? 'ORGANIZATION' : c === 'person' ? 'PERSON' : undefined;
+        }
+        const overrides: ContextOverrides = {
+          channel: flag('--channel'),
+          tld: flag('--tld'),
+          market: flag('--market'),
+          locale: flag('--locale'),
+          // NB: --account-name is a reserved global flag (v2 account), so the storefront
+          // account slug uses --store-account here.
+          accountName: flag('--store-account'),
+          environment: flag('--environment') as ContextOverrides['environment'],
+        };
+
+        // `config` manages stored context and needs no live call; everything else resolves context.
+        if (sub === 'config') {
+          if (subArgs[0]?.toLowerCase() === 'set') {
+            const ctxPatch = Object.fromEntries(
+              Object.entries(overrides).filter(([, v]) => v !== undefined),
+            );
+            // Persisted checkout defaults (merged onto the existing ones).
+            const cur = await loadCredentials();
+            const urls = redirectsFromFlags();
+            const branding = jsonFlag('--branding') as CheckoutBranding | undefined;
+            const dp = flag('--default-payment');
+            const ds = flag('--default-shipping');
+            const ct = customerTypeFromFlag();
+            const hasCheckout = !!(urls || branding || dp || ds || ct);
+            let checkout: StoredCheckoutDefaults | undefined;
+            if (hasCheckout) {
+              checkout = { ...(cur?.checkout ?? {}) };
+              if (urls) checkout.redirectUrls = { ...cur?.checkout?.redirectUrls, ...urls };
+              if (branding) checkout.branding = branding as StoredCheckoutDefaults['branding'];
+              if (dp) checkout.defaultPaymentId = Number(dp);
+              if (ds) checkout.defaultShippingId = Number(ds);
+              if (ct) checkout.customerType = ct;
+            }
+            const patch = { ...ctxPatch, ...(hasCheckout ? { checkout } : {}) };
+            if (Object.keys(patch).length === 0) {
+              console.error('Usage: geins merchant config set [--channel <c>] [--tld <t>] [--market <m>] [--locale <l>] [--store-account <slug>] [--environment prod|qa|dev]');
+              console.error('  checkout defaults: [--success <url>] [--cancel <url>] [--continue <url>] [--terms <url>] [--privacy <url>] [--default-payment <id>] [--default-shipping <id>] [--customer-type person|organization] [--branding <json|@file>]');
+              process.exit(1);
+            }
+            const name = await updateActiveCredentials(patch);
+            if (!name) {
+              console.error('No active api-key profile. Run geins apikey set to add one.');
+              process.exit(1);
+            }
+            console.log(`✓ Merchant context saved on profile '${name}'.`);
+          }
+          const ctx = await resolveMerchantContext(overrides);
+          if (jsonMode) {
+            outputJson(ctx);
+          } else {
+            console.log(`account-name: ${ctx.accountName ?? '(unset)'}`);
+            console.log(`channel:      ${ctx.channel ?? '(unset)'}`);
+            console.log(`tld:          ${ctx.tld ?? '(unset)'}`);
+            console.log(`market:       ${ctx.market ?? '(unset)'}`);
+            console.log(`locale:       ${ctx.locale ?? '(unset)'}`);
+            console.log(`environment:  ${ctx.environment}`);
+            console.log(`channelId:    ${ctx.channel && ctx.tld ? `${ctx.channel}|${ctx.tld}` : '(unset)'}`);
+            const cd = ctx.checkoutDefaults;
+            if (cd && Object.keys(cd).length > 0) {
+              console.log('checkout defaults:');
+              if (cd.defaultPaymentId != null) console.log(`  payment:   ${cd.defaultPaymentId}`);
+              if (cd.defaultShippingId != null) console.log(`  shipping:  ${cd.defaultShippingId}`);
+              if (cd.customerType) console.log(`  customer:  ${cd.customerType}`);
+              for (const [k, v] of Object.entries(cd.redirectUrls ?? {})) console.log(`  ${k}: ${v}`);
+              if (cd.branding) console.log(`  branding:  ${JSON.stringify(cd.branding)}`);
+            }
+          }
+          break;
+        }
+
+        if (sub === 'help' || sub === '') {
+          console.log(MERCHANT_HELP);
+          break;
+        }
+
+        // `token parse` is pure offline decoding — no credentials/context needed.
+        if (sub === 'token' && subArgs[0]?.toLowerCase() === 'parse') {
+          const token = subArgs[1];
+          if (!token) { console.error('Usage: geins merchant token parse <token>'); process.exit(1); }
+          outputJson(parseCheckoutToken(token));
+          break;
+        }
+
+        const ctx = await resolveMerchantContext(overrides);
+
+        switch (sub) {
+          case 'product': {
+            if (subArgs[0]?.toLowerCase() === 'search') {
+              const positional = subArgs.slice(1).filter((a) => !a.startsWith('--'));
+              const searchText = positional[0];
+              const result = await searchProducts(
+                {
+                  searchText,
+                  categoryAlias: flag('--category'),
+                  brandAlias: flag('--brand'),
+                  take: flag('--take') ? Number(flag('--take')) : undefined,
+                  skip: flag('--skip') ? Number(flag('--skip')) : undefined,
+                },
+                ctx,
+              );
+              if (jsonMode) {
+                outputJson(result);
+              } else {
+                for (const p of result.products ?? []) console.log(productLine(p));
+                if (result.count !== undefined) console.log(`\n${result.count} products`);
+              }
+            } else {
+              const idOrTerm = subArgs[0];
+              if (!idOrTerm) {
+                console.error('Usage: geins merchant product <productId|term> | geins merchant product search [text]');
+                process.exit(1);
+              }
+              const product = await getMerchantProduct(idOrTerm, ctx);
+              if (!product) {
+                console.error('No product found.');
+                process.exit(2);
+              }
+              outputJson(product);
+            }
+            break;
+          }
+          case 'categories':
+          case 'category': {
+            const cats = await listMerchantCategories();
+            if (jsonMode) {
+              outputJson(cats);
+            } else {
+              for (const c of cats) console.log(`${c.categoryId}  ${c.name ?? ''}${c.alias ? `  (${c.alias})` : ''}`);
+              console.log(`\n${cats.length} categories`);
+            }
+            break;
+          }
+          case 'brands':
+          case 'brand': {
+            const brands = await listMerchantBrands();
+            if (jsonMode) {
+              outputJson(brands);
+            } else {
+              for (const b of brands) console.log(`${b.brandId}  ${b.name ?? ''}${b.alias ? `  (${b.alias})` : ''}`);
+              console.log(`\n${brands.length} brands`);
+            }
+            break;
+          }
+          case 'cart': {
+            const action = subArgs[0]?.toLowerCase() ?? '';
+            switch (action) {
+              case 'create': {
+                const cart = await createCart(ctx);
+                if (jsonMode) outputJson(cart);
+                else console.log(cart.id);
+                break;
+              }
+              case 'get': {
+                const id = subArgs[1];
+                if (!id) { console.error('Usage: geins merchant cart get <id>'); process.exit(1); }
+                const cart = await getCart(id, ctx);
+                if (jsonMode) outputJson(cart);
+                else for (const line of cartLines(cart)) console.log(line);
+                break;
+              }
+              case 'add': {
+                const id = subArgs[1];
+                const sku = flag('--sku');
+                if (!id || !sku) { console.error('Usage: geins merchant cart add <id> --sku <skuId> [--qty N]'); process.exit(1); }
+                const cart = await addToCart(id, { skuId: Number(sku), quantity: flag('--qty') ? Number(flag('--qty')) : 1 }, ctx);
+                if (jsonMode) outputJson(cart);
+                else for (const line of cartLines(cart)) console.log(line);
+                break;
+              }
+              case 'update': {
+                const id = subArgs[1];
+                const item = flag('--item');
+                const qty = flag('--qty');
+                if (!id || !item || qty === undefined) { console.error('Usage: geins merchant cart update <id> --item <itemId> --qty <n>'); process.exit(1); }
+                const cart = await updateCartItem(id, { id: item, quantity: Number(qty) }, ctx);
+                if (jsonMode) outputJson(cart);
+                else for (const line of cartLines(cart)) console.log(line);
+                break;
+              }
+              case 'remove': {
+                const id = subArgs[1];
+                const item = flag('--item');
+                if (!id || !item) { console.error('Usage: geins merchant cart remove <id> --item <itemId>'); process.exit(1); }
+                const cart = await removeFromCart(id, item, ctx);
+                if (jsonMode) outputJson(cart);
+                else for (const line of cartLines(cart)) console.log(line);
+                break;
+              }
+              case 'promo': {
+                const id = subArgs[1];
+                const code = subArgs[2];
+                if (!id || !code) { console.error('Usage: geins merchant cart promo <id> <code>'); process.exit(1); }
+                const cart = await setCartPromoCode(id, code, ctx);
+                if (jsonMode) outputJson(cart);
+                else for (const line of cartLines(cart)) console.log(line);
+                break;
+              }
+              default:
+                console.error('Usage: geins merchant cart [create | get <id> | add <id> --sku <skuId> | update <id> --item <itemId> --qty N | remove <id> --item <itemId> | promo <id> <code>]');
+                process.exit(1);
+            }
+            break;
+          }
+          case 'token': {
+            // `token parse` is handled earlier (offline, no context).
+            const cartId = subArgs[0];
+            if (!cartId) { console.error('Usage: geins merchant token <cartId> [options]'); process.exit(1); }
+            const opts: CheckoutTokenOptions = {
+              cartId,
+              selectedPaymentMethodId: flag('--payment') ? Number(flag('--payment')) : undefined,
+              selectedShippingMethodId: flag('--shipping') ? Number(flag('--shipping')) : undefined,
+              availablePaymentMethodIds: intList('--available-payments'),
+              availableShippingMethodIds: intList('--available-shipping'),
+              customerType: customerTypeFromFlag(),
+              isCartEditable: commandArgs.includes('--editable') ? true : undefined,
+              copyCart: commandArgs.includes('--no-copy') ? false : undefined,
+              redirectUrls: redirectsFromFlags(),
+              branding: jsonFlag('--branding') as CheckoutBranding | undefined,
+              user: jsonFlag('--user') as Record<string, unknown> | undefined,
+            };
+            const token = buildCheckoutToken(opts, ctx);
+            const url = commandArgs.includes('--url');
+            // The hosted checkout takes the token at the ROOT path (per @geins/sdk:
+            // `https://checkout.geins.services/${token}`). A `/checkout/<token>` path is a
+            // different (redirect) route that drops the token and never renders.
+            const checkoutUrl = `https://checkout.geins.services/${token}`;
+            if (jsonMode) outputJson(url ? { token, url: checkoutUrl } : { token });
+            else console.log(url ? checkoutUrl : token);
+            break;
+          }
+          default:
+            console.error(`Unknown subcommand: merchant ${sub}\n`);
+            console.error(MERCHANT_HELP);
             process.exit(1);
         }
         break;
