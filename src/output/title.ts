@@ -16,5 +16,5 @@ export function setBaseTitle(title: string): void {
 
 /** Toggle the "working..." suffix on the current base title (e.g. during a copilot run). */
 export function setWorking(working: boolean): void {
-  write(working ? `${baseTitle} working...` : baseTitle);
+  write(working ? `${baseTitle} - working...` : baseTitle);
 }
