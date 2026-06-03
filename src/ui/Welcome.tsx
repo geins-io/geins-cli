@@ -139,7 +139,7 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
         <Text>2026 is the year agents run the store. Synapse makes your catalog,</Text>
         <Text>orders, and workflows agent-ready — structured, scriptable, and live.</Text>
         <Text> </Text>
-        <Text>Type a command, hand it to <Text color="magenta">copilot</Text>, or go fully headless with your favorite agent software.</Text>
+        <Text>Type a command, hand it to <Text color="magenta">copilot</Text>, or go fully headless with your favorite agent framework.</Text>
         <Text>Your commerce, on autopilot.</Text>
 
       </Box>
