@@ -50,6 +50,7 @@ import { applyMemoryAccount } from './memory/index.ts';
 import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
 import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
 import { outputJson } from './output/format.ts';
+import { setBaseTitle } from './output/title.ts';
 
 const VERSION = '0.1.0';
 
@@ -276,8 +277,9 @@ async function launchTui(resume?: { open: boolean; id?: string }): Promise<void>
     process.exit(1);
   }
 
-  // Set the terminal window/tab title (held while the TUI runs).
-  process.stdout.write('\x1b]0;Geins terminal companion\x07');
+  // Set the terminal window/tab title (held while the TUI runs). The app refines this
+  // to include the session id once the session starts.
+  setBaseTitle('Geins Synapse');
 
   // Clear the screen (and scrollback) so the TUI starts on a clean canvas.
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H');

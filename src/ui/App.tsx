@@ -16,6 +16,7 @@ import { saveSession, addCredentials, loadCredentialsStore, useCredentials, remo
 import { resetCredentialsCache } from '../api/live-client.ts';
 import { setActiveSignal } from '../api/abort.ts';
 import { setOutputDir, getOutputDir } from '../output/sink.ts';
+import { setWorking } from '../output/title.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request, resetSessionCache } from '../api/client.ts';
@@ -373,6 +374,8 @@ export function App({ version = VERSION }: { version?: string }) {
 
     // Copilot mode: non-slash input goes to AI
     if (appState.copilotActive && !trimmed.startsWith('/')) {
+      // Flag the tab as busy while we wait on the copilot.
+      setWorking(true);
       appState.addToChat(
         <Text key={`msg-${appState.getNextKey()}`} bold>{`❯ ${trimmed}`}</Text>,
       );
@@ -469,6 +472,7 @@ export function App({ version = VERSION }: { version?: string }) {
           const MAX_ROUNDS = 6;
           let pending = cleaned;
           for (let round = 0; round < MAX_ROUNDS; round++) {
+            if (controller.signal.aborted) throw new Error('cancelled');
             const commands = extractGeinsCommands(pending);
             if (commands.length === 0) break;
 
@@ -481,6 +485,7 @@ export function App({ version = VERSION }: { version?: string }) {
               );
               const result = await executeGeinsCommand(cmd);
               appState.setLiveComponent(null);
+              if (controller.signal.aborted) throw new Error('cancelled');
               await addToolResult(cmd, result.output);
               // Collapse long outputs to a one-line summary (the model still gets the
               // full result, and it's written to the output folder). Short ones show.
@@ -1964,6 +1969,7 @@ export function App({ version = VERSION }: { version?: string }) {
 
     } finally {
       setBusy(false);
+      setWorking(false);
       setActiveSignal(undefined);
       abortRef.current = null;
     }

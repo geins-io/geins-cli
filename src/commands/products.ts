@@ -167,7 +167,7 @@ export interface GetProductOptions {
 
 export async function getProduct(id: string, options?: GetProductOptions): Promise<Product> {
   const envelope = await mgmtRequest<Envelope<Product>>(`/API/Product/${encodeURIComponent(id)}`, {
-    query: { productIdType: options?.idType, include: options?.include },
+    query: { productIdType: options?.idType ?? 0, include: options?.include },
   });
   return envelope.Resource;
 }
@@ -193,7 +193,7 @@ export async function updateProduct(
   const envelope = await mgmtRequest<Envelope<Product>>(`/API/Product/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: changes,
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
   return envelope.Resource;
 }
@@ -362,7 +362,7 @@ export async function getVariantGroup(
   try {
     const envelope = await mgmtRequest<Envelope<VariantGroup>>(
       `/API/Variant/${encodeURIComponent(id)}/VariantGroup`,
-      { query: { productIdType: options?.idType, include: options?.include ?? 'Names,Variants' } },
+      { query: { productIdType: options?.idType ?? 0, include: options?.include ?? 'Names,Variants' } },
     );
     return envelope.Resource ?? null;
   } catch (err) {
@@ -422,7 +422,7 @@ export async function addProductToVariantGroup(
 ): Promise<VariantGroup> {
   const envelope = await mgmtRequest<Envelope<VariantGroup>>(
     `/API/VariantGroup/${groupId}/${encodeURIComponent(productId)}`,
-    { method: 'PUT', body: dimensions, query: { productIdType: options?.idType } },
+    { method: 'PUT', body: dimensions, query: { productIdType: options?.idType ?? 0 } },
   );
   return envelope.Resource;
 }
@@ -436,7 +436,7 @@ export async function setProductVariants(
   await mgmtRequest(`/API/Variant/${encodeURIComponent(productId)}`, {
     method: 'PUT',
     body: dimensions,
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 
@@ -736,7 +736,7 @@ export async function uploadProductImage(
     {
       method: options?.method ?? 'PUT',
       query: {
-        productIdType: options?.idType,
+        productIdType: options?.idType ?? 0,
         isPrimaryImage: options?.primary,
         position: options?.position,
       },
@@ -783,7 +783,7 @@ export async function addExistingProductImage(
     `/API/Product/${encodeURIComponent(id)}/ImageRelation/${encodeURIComponent(imageName)}`,
     {
       method: 'PUT',
-      query: { productIdType: options?.idType },
+      query: { productIdType: options?.idType ?? 0 },
     },
   );
   return envelope.Resource ?? {};
@@ -797,7 +797,7 @@ export async function deleteProductImage(
 ): Promise<void> {
   await mgmtRequest(`/API/Product/${encodeURIComponent(id)}/Image/${encodeURIComponent(imageName)}`, {
     method: 'DELETE',
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 
@@ -1030,7 +1030,7 @@ export async function assignProductCategory(
   await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Category`, {
     method: 'PUT',
     body: { CategoryId: categoryId },
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 
@@ -1110,7 +1110,7 @@ export async function unassignProductCategory(
   await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}`, {
     method: 'PUT',
     body: { CategoryIds: ordered },
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 
   // Re-read: the API may have normalised the set (e.g. re-added ancestors), so report reality.
@@ -1156,7 +1156,7 @@ export async function linkRelatedProducts(
   await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Related/${relationTypeId}`, {
     method: 'PUT',
     body,
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 
@@ -1171,7 +1171,7 @@ export async function unlinkRelatedProducts(
   await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/UnlinkRelated/${relationTypeId}`, {
     method: 'PUT',
     body,
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 
@@ -1232,7 +1232,7 @@ export async function getProductParameterValue(
 ): Promise<ProductParameterValue> {
   const envelope = await mgmtRequest<Envelope<ProductParameterValue>>(
     `/API/Product/${encodeURIComponent(productId)}/Parameter/${parameterId}`,
-    { query: { productIdType: options?.idType } },
+    { query: { productIdType: options?.idType ?? 0 } },
   );
   return envelope.Resource;
 }
@@ -1249,7 +1249,7 @@ export async function setProductParameterValue(
     {
       method: 'POST',
       body: { Value: value, LocalizedDescriptions: options?.localizedDescriptions },
-      query: { productIdType: options?.idType },
+      query: { productIdType: options?.idType ?? 0 },
     },
   );
   return envelope.Resource;
@@ -1263,7 +1263,7 @@ export async function removeProductParameterValue(
 ): Promise<void> {
   await mgmtRequest(`/API/Product/${encodeURIComponent(productId)}/Parameter/${parameterId}`, {
     method: 'DELETE',
-    query: { productIdType: options?.idType },
+    query: { productIdType: options?.idType ?? 0 },
   });
 }
 

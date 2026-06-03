@@ -501,7 +501,6 @@ export async function chatStream(
     stdin: 'pipe',
     ...(await copilotProcOptions()),
   });
-  killOnAbort(proc);
 
   proc.stdin.write(fullPrompt);
   proc.stdin.end();
@@ -509,6 +508,19 @@ export async function chatStream(
   const reader = proc.stdout.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+
+  // Ctrl-C handling: cancel the reader so the read loop ends *immediately* — we can't rely
+  // on the copilot CLI dying promptly on a kill signal, and a blocked reader.read() would
+  // otherwise hang the whole turn. Then terminate the process.
+  const signal = getActiveSignal();
+  const onAbort = () => {
+    reader.cancel().catch(() => { /* already closed */ });
+    try { proc.kill(); } catch { /* already gone */ }
+  };
+  if (signal) {
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  }
 
   if (isStreamJson) {
     let lineBuf = '';
@@ -555,6 +567,8 @@ export async function chatStream(
   }
 
   const exitCode = await proc.exited;
+  // Cancelled by the user (Ctrl-C) — surface it as an abort, not a process-error.
+  if (signal?.aborted) throw new Error('Copilot cancelled.');
   if (exitCode !== 0) {
     const stderr = await new Response(proc.stderr).text();
     throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);

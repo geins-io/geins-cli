@@ -3,6 +3,7 @@ import { loadSession } from '../../auth/session.ts';
 import { checkAuthStatus, type AuthState } from '../../auth/status.ts';
 import { loadConfig, saveConfig, loadCredentialsStore } from '../../config/store.ts';
 import { startSession, endSession, applyMemoryAccount } from '../../memory/index.ts';
+import { setBaseTitle } from '../../output/title.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 import type { SessionMeta } from '../SelectSession.tsx';
 
@@ -71,6 +72,7 @@ export function useAppState() {
       // starting the session log, so per-account data never leaks across accounts.
       await applyMemoryAccount();
       setStatus(s => ({ ...s, apiAccount: credentials.active ?? '' }));
+      let sessionId: string;
       if (session) {
         setStatus(s => ({
           ...s,
@@ -78,10 +80,13 @@ export function useAppState() {
           account: session.accountKey,
           accountName: session.accountName ?? '',
         }));
-        startSession(session.accountKey);
+        sessionId = await startSession(session.accountKey);
       } else {
-        startSession();
+        sessionId = await startSession();
       }
+      // Set the terminal window/tab title now that the session id exists. OSC 0 is
+      // out-of-band, so it doesn't disturb Ink's rendering.
+      setBaseTitle(`Geins Synapse - ${sessionId}`);
       if (config.theme) {
         setStatus(s => ({ ...s, theme: config.theme! }));
       }
