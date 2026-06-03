@@ -3,6 +3,7 @@ node_modules
 .temp
 .tmp
 .mint
+exports
 
 # output
 out

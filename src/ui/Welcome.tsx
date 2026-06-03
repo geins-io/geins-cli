@@ -2,21 +2,29 @@ import React from 'react';
 import { Box, Text, useWindowSize } from 'ink';
 
 const LOGO_FULL = [
-  '██╗     ██╗████████╗██╗██╗   ██╗███╗   ███╗     ██████╗ ██████╗ ██████╗ ███████╗',
-  '██║     ██║╚══██╔══╝██║██║   ██║████╗ ████║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
-  '██║     ██║   ██║   ██║██║   ██║██╔████╔██║    ██║     ██║   ██║██████╔╝█████╗  ',
-  '██║     ██║   ██║   ██║██║   ██║██║╚██╔╝██║    ██║     ██║   ██║██╔══██╗██╔══╝  ',
-  '███████╗██║   ██║   ██║╚██████╔╝██║ ╚═╝ ██║    ╚██████╗╚██████╔╝██║  ██║███████╗',
-  '╚══════╝╚═╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝     ╚═╝     ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝',
+'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
+' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
+' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
+' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
+' ╚██████╔╝███████╗██║██║ ╚████║███████║',
+'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
 ];
-
 const LOGO_COMPACT = [
-  '██╗      ██████╗ ██████╗ ██████╗ ███████╗',
-  '██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝',
-  '██║     ██║     ██║   ██║██████╔╝█████╗  ',
-  '██║     ██║     ██║   ██║██╔══██╗██╔══╝  ',
-  '███████╗╚██████╗╚██████╔╝██║  ██║███████╗',
-  '╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝',
+'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
+' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
+' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
+' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
+' ╚██████╔╝███████╗██║██║ ╚████║███████║',
+'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
+  ];
+
+const PROMPT = [
+'██╗     ',
+'╚██╗    ',
+' ╚██╗   ',
+' ██╔╝   ',
+'██╔╝    ',
+'╚═╝ ▁▁▁ ',
 ];
 
 const COLORS = ['cyan', 'cyan', '#3b82f6', '#3b82f6', 'green', 'green'] as const;
@@ -33,13 +41,15 @@ export function Welcome({ version, user, account }: WelcomeProps) {
   const logo = columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
 
   return (
-    <Box flexDirection="column" paddingX={2}>
+    <Box flexDirection="column" paddingX={1}>
       <Text> </Text>
       {logo.map((line, i) => (
-        <Text key={i} color={COLORS[i]}>{`  ${line}`}</Text>
+        <Text key={i} color={COLORS[i]}>{`${PROMPT[i]}${line}`}</Text>
       ))}
       <Text> </Text>
-      <Box flexDirection="column" paddingX={2}>
+
+      <Text> </Text>
+      <Box flexDirection="column" paddingX={1}>
         <Box gap={1}>
           <Text color="cyan" bold>✻</Text>
           <Text bold>Geins CLI</Text>
@@ -58,6 +68,17 @@ export function Welcome({ version, user, account }: WelcomeProps) {
           ) : null}
         </Box>
         <Text dimColor>  Type /help for commands, /exit to quit</Text>
+      </Box>
+      <Box
+        borderStyle="round"
+        borderColor="cyan"
+        flexDirection="column"
+        marginLeft={-1}
+        marginRight={-1}
+        paddingX={1}
+      >
+        <Text>Welcome to <Text bold color="cyan">Geins CLI</Text> — your terminal companion for the Geins Commerce Backend.</Text>
+        <Text dimColor>Manage products, categories, orders, and workflows. Type <Text color="cyan">/help</Text> to get started.</Text>
       </Box>
       <Text> </Text>
     </Box>
