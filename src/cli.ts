@@ -3,7 +3,7 @@ import { render } from 'ink';
 import { App } from './ui/App.tsx';
 import { loadConfig, saveConfig, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, type ApiCredentials } from './config/store.ts';
 import { setOutputDir, getOutputDir } from './output/sink.ts';
-import { request } from './api/client.ts';
+import { request, setAccountKeyOverride } from './api/client.ts';
 import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
@@ -45,7 +45,7 @@ import {
   parseOrderListArgs,
   type OrderUpdate,
 } from './commands/orders.ts';
-import { listMarkets, listLanguages, listChannels, listLocales, marketName } from './commands/account.ts';
+import { listMarkets, listLanguages, listChannels, listLocales, marketName, listUserAccounts } from './commands/account.ts';
 import { applyMemoryAccount } from './memory/index.ts';
 import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
 import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
@@ -201,16 +201,21 @@ const ACCOUNT_HELP = [
   'geins account — show account settings (v2 Account API)',
   '',
   'Subcommands:',
+  '  list [--json]           List the accounts you can access (● = current)',
   '  (none)                  Overview: markets + languages + locales',
   '  markets [--json]        List market definitions (country-currency, e.g. SE-SEK, with VAT)',
   '  languages [--json]      List the account\'s languages (code + name)',
   '  locales [--json]        List locales (language-country tags, e.g. sv-SE) derived from channels',
   '',
+  'Target another account for a single command with --account-name <name> (resolves the',
+  'friendly name to the x-account-key). For live-API commands (product/order), pick the apikey',
+  'profile with --account <name>. The two are independent (different APIs).',
+  '',
   'Examples:',
-  '  geins account',
-  '  geins account markets --json',
-  '  geins account languages',
-  '  geins account locales',
+  '  geins account list',
+  '  geins workflow list --account-name labs        # run against the "labs" v2 account',
+  '  geins account markets --account-name demogeins --json',
+  '  geins product get 10001 --account prod-labs    # live API, by apikey profile',
 ].join('\n');
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
@@ -286,13 +291,20 @@ async function launchTui(resume?: { open: boolean; id?: string }): Promise<void>
 
 async function runDirect(rawArgs: string[]): Promise<void> {
   // Global flags stripped before command parsing so they can appear anywhere:
-  //   --account/--profile <name>  selects the live-API account
-  //   --out <dir>                 dumps responses + a request log to <dir>
+  //   --account/--profile/--apikey <name>  selects the live-API apikey profile (product/order/…)
+  //   --account-name <name>                selects the v2 account (workflow/account/…) by name
+  //   --out <dir>                          dumps responses + a request log to <dir>
   let accountOverride = process.env['GEINS_ACCOUNT'];
+  let accountNameOverride = process.env['GEINS_ACCOUNT_NAME'];
   let outOverride: string | undefined;
   const args: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
-    if ((rawArgs[i] === '--account' || rawArgs[i] === '--profile') && rawArgs[i + 1]) {
+    if (rawArgs[i] === '--account-name' && rawArgs[i + 1]) {
+      accountNameOverride = rawArgs[i + 1];
+      i++;
+      continue;
+    }
+    if ((rawArgs[i] === '--account' || rawArgs[i] === '--profile' || rawArgs[i] === '--apikey') && rawArgs[i + 1]) {
       accountOverride = rawArgs[i + 1];
       i++;
       continue;
@@ -306,6 +318,24 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   }
   if (accountOverride) setProfileOverride(accountOverride);
   if (outOverride) setOutputDir(outOverride);
+
+  // Resolve the v2 account name to its account key (the x-account-key value). A 32-char hex
+  // value is treated as a key directly; anything else is matched against the user's accounts
+  // by friendly name (case-insensitive) via one /user/me lookup.
+  if (accountNameOverride) {
+    const wanted = accountNameOverride;
+    if (/^[0-9a-f]{32}$/i.test(wanted)) {
+      setAccountKeyOverride(wanted);
+    } else {
+      const accounts = await listUserAccounts();
+      const match = accounts.find(a => a.name.toLowerCase() === wanted.toLowerCase());
+      if (!match) {
+        console.error(`Unknown account: '${wanted}'. Run 'geins account list' to see available accounts.`);
+        process.exit(1);
+      }
+      setAccountKeyOverride(match.accountKey);
+    }
+  }
 
   // Scope memory to the same composite (session + apikey) bucket the TUI uses, so headless
   // `resume`/`ask` read & write the same sessions and chat history. Without this, headless
@@ -336,7 +366,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  ask       Ask the copilot a question (-c/--continue to keep the prior conversation)');
     console.log('  resume    Print a past session transcript (no id → list sessions)\n');
     console.log('Global flags:');
-    console.log('  --account <name>   Use a specific live-API account (or set GEINS_ACCOUNT)');
+    console.log('  --account <name>      Live-API apikey profile, e.g. prod-labs (alias --profile/--apikey; or GEINS_ACCOUNT)');
+    console.log('  --account-name <name> v2 account by friendly name, e.g. labs (or GEINS_ACCOUNT_NAME) — sets x-account-key');
     console.log('  --out <dir>        Dump responses + request log to <dir> (or set GEINS_OUTPUT_DIR)');
     console.log('  --json      Force JSON output');
     console.log('  --resume [id]  Open the TUI and resume a session (picker if no id)');
@@ -376,6 +407,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           console.log(`Account: ${label}`);
         }
         if (session.user.roles.length > 0) console.log(`Roles: ${session.user.roles.join(', ')}`);
+        const credStore = await loadCredentialsStore();
+        if (credStore.active) console.log(`API key: ${credStore.active}`);
         break;
       }
       case 'resume': {
@@ -1664,9 +1697,22 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         break;
       }
       case 'account': {
-        const sub = commandArgs[0]?.toLowerCase();
+        // First non-flag arg is the subcommand, so `account --json` isn't mistaken for one.
+        const sub = commandArgs.find((a) => !a.startsWith('-'))?.toLowerCase();
         const jsonMode = commandArgs.includes('--json');
         const vatPct = (rate?: number) => (rate != null ? `VAT ${+(rate * 100).toFixed(2)}%` : null);
+
+        if (sub === 'list' || sub === 'accounts') {
+          const accounts = await listUserAccounts();
+          if (jsonMode) { outputJson(accounts); break; }
+          const session = await loadSession();
+          for (const a of accounts) {
+            const marker = a.accountKey === session?.accountKey ? '●' : '○';
+            console.log(`${marker} ${a.name}  (${a.accountKey})  ${a.roles.join(', ')}`);
+          }
+          console.log(`\n${accounts.length} account${accounts.length === 1 ? '' : 's'}  · ● = current. Use with: --account-name <name>`);
+          break;
+        }
 
         if (sub === 'languages' || sub === 'language' || sub === 'langs') {
           const languages = await listLanguages();
@@ -1698,18 +1744,21 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           break;
         }
 
-        // Default: overview of markets, languages, and locales.
+        // A subcommand was given but didn't match any branch above — error instead of
+        // silently showing the overview.
+        if (sub) {
+          console.error(`Unknown subcommand: account ${sub}`);
+          console.error('Usage: geins account [markets | languages | locales] [--json]');
+          process.exit(1);
+        }
+
+        // Default (no subcommand): a compact summary (counts only). --json keeps the full
+        // data; the subcommands print the full human-readable lists.
         const [markets, languages, channels] = await Promise.all([listMarkets(), listLanguages(), listChannels()]);
         const locales = await listLocales({ channels, languages });
         if (jsonMode) { outputJson({ markets, languages, locales }); break; }
-        console.log(`Markets (${markets.length}):`);
-        for (const m of markets) {
-          const bits = [m.currency?._id, vatPct(m.standardVatRate)].filter(Boolean).join(' · ');
-          console.log(`  ${marketName(m)}${bits ? `  (${bits})` : ''}`);
-        }
-        console.log(`\nLanguages (${languages.length}):`);
-        for (const l of languages) console.log(`  ${l._id}  ${l.name}`);
-        console.log(`\nLocales (${locales.length}): ${locales.map((l) => l.tag).join(', ')}`);
+        console.log(`Markets: ${markets.length} · Languages: ${languages.length} · Locales: ${locales.length}`);
+        console.log('Run: geins account [list | markets | languages | locales] [--json]');
         break;
       }
       default:

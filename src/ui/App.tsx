@@ -9,6 +9,7 @@ import { ApiKeyFlow } from './ApiKeyFlow.tsx';
 import { SelectApiKey } from './SelectApiKey.tsx';
 import { VariantBuilder } from './VariantBuilder.tsx';
 import { SelectAccount } from './SelectAccount.tsx';
+import { Confirm } from './Confirm.tsx';
 import { useAppState } from './hooks/useAppState.ts';
 import { clearSession, parseJwtExp } from '../auth/session.ts';
 import { saveSession, addCredentials, loadCredentialsStore, useCredentials, removeCredentials, clearCredentials, loadConfig, saveConfig, type ApiCredentials } from '../config/store.ts';
@@ -213,17 +214,80 @@ export function App({ version = VERSION }: { version?: string }) {
   // account-agnostic; x-account-key selects the account per request).
   const switchingAccountRef = useRef(false);
 
+  // A pending yes/no prompt (rendered as a Confirm modal). Held in a ref since the payload is
+  // a callback; setActiveMode('confirm') drives the render.
+  const confirmRef = useRef<{ message: string; onYes: () => void | Promise<void> } | null>(null);
+
+  const askConfirm = useCallback((message: string, onYes: () => void | Promise<void>) => {
+    confirmRef.current = { message, onYes };
+    appState.setActiveMode('confirm');
+  }, [appState]);
+
+  const handleConfirmYes = useCallback(async () => {
+    const action = confirmRef.current?.onYes;
+    confirmRef.current = null;
+    appState.setActiveMode(null);
+    if (action) await action();
+  }, [appState]);
+
+  const handleConfirmNo = useCallback(() => {
+    confirmRef.current = null;
+    appState.setActiveMode(null);
+  }, [appState]);
+
+  // After an account is selected, check for a matching live-API key profile. Profiles are keyed
+  // by their Management API Key (e.g. "prod-labs"); the convention is the account name with a
+  // "prod-" prefix. If the match isn't active, offer to switch to it; if there's no match, offer
+  // to add a key for this account.
+  const reconcileApiKey = useCallback(async (accountName: string) => {
+    if (!accountName) return;
+    const store = await loadCredentialsStore();
+    const want = accountName.toLowerCase();
+    const match = Object.keys(store.profiles).find(n => n.replace(/^prod-/i, '').toLowerCase() === want);
+    if (match) {
+      if (match === store.active) return; // already the active key — nothing to do
+      askConfirm(`  API key '${match}' matches account '${accountName}'. Switch to it?`, async () => {
+        await useCredentials(match);
+        resetCredentialsCache();
+        await applyMemoryAccount();
+        appState.updateStatus({ apiAccount: match });
+        logSuccess(`  ✓ Switched API key to '${match}'.`);
+      });
+    } else {
+      askConfirm(`  No API key found for account '${accountName}'. Add one now?`, () => {
+        appState.setActiveMode('apikey');
+      });
+    }
+  }, [appState, askConfirm, logSuccess]);
+
   // Rewrite the stored session's account, drop the client's session cache so the next request
-  // sends the new x-account-key, and re-scope memory to the new account bucket.
+  // sends the new x-account-key. On a real change, rotate the memory session into the new
+  // account's bucket and start on a clean screen with the welcome banner reflecting the new
+  // identity (the banner is driven by status, which updateStatus refreshes).
   const applyAccountSwitch = useCallback(async (accountKey: string, accountName: string) => {
     const session = await loadSession();
     if (!session) { logError('  Not logged in. Run /login first.'); return; }
+    const changed = session.accountKey !== accountKey;
     await saveSession({ ...session, accountKey, accountName });
     resetSessionCache();
-    await applyMemoryAccount();
+
+    if (changed) {
+      // Close the current session log in the old bucket, re-scope, then open a fresh one.
+      await endSession();
+      await applyMemoryAccount();
+      await startSession(accountKey);
+    } else {
+      await applyMemoryAccount();
+    }
+
     appState.updateStatus({ account: accountKey, accountName });
+
+    if (changed) {
+      appState.setChatComponents([]); // clear the screen for the new account
+    }
     logSuccess(`  ✓ Switched to ${accountName || accountKey}`);
-  }, [appState, logSuccess, logError]);
+    await reconcileApiKey(accountName);
+  }, [appState, logSuccess, logError, reconcileApiKey]);
 
   const handleAccountSwitchSelected = useCallback(async (accountKey: string) => {
     switchingAccountRef.current = false;
@@ -630,6 +694,8 @@ export function App({ version = VERSION }: { version?: string }) {
             logText(`  Account: ${label}`);
           }
           if (session.user.roles.length > 0) logText(`  Roles: ${session.user.roles.join(', ')}`);
+          const credStore = await loadCredentialsStore();
+          if (credStore.active) logText(`  API key: ${credStore.active}`);
           break;
         }
 
@@ -682,6 +748,24 @@ export function App({ version = VERSION }: { version?: string }) {
             break;
           }
 
+          if (sub === 'list' || sub === 'accounts') {
+            const session = await loadSession();
+            let accounts;
+            try {
+              accounts = await listUserAccounts();
+            } catch (err) {
+              logError(`  ${formatError(err)}`);
+              break;
+            }
+            if (accounts.length === 0) { logDim('  No accounts available.'); break; }
+            for (const a of accounts) {
+              const marker = a.accountKey === session?.accountKey ? '●' : '○';
+              logText(`  ${marker} ${a.name}${a.roles.length ? `  ${a.roles.join(', ')}` : ''}`);
+            }
+            logDim(`  ${accounts.length} account${accounts.length === 1 ? '' : 's'} · ● = current · switch with /account use`);
+            break;
+          }
+
           if (sub === 'languages' || sub === 'language' || sub === 'langs') {
             const languages = await listLanguages();
             if (languages.length === 0) { logDim('  No languages.'); break; }
@@ -709,14 +793,20 @@ export function App({ version = VERSION }: { version?: string }) {
             break;
           }
 
-          // Default: an overview of all three. Fetch channels + languages once and reuse
-          // them for the locale derivation to avoid duplicate calls.
+          // A subcommand was given but didn't match any branch above — don't silently
+          // fall through to the overview.
+          if (sub) {
+            logError(`  Unknown subcommand: account ${sub}`);
+            logDim('  Usage: /account [list | use | markets | languages | locales]');
+            break;
+          }
+
+          // Default (no subcommand): a compact summary (counts only). The subcommands print
+          // the full lists. Fetch channels + languages once and reuse for the locale count.
           const [markets, languages, channels] = await Promise.all([listMarkets(), listLanguages(), listChannels()]);
           const locales = await listLocales({ channels, languages });
-          logText(`  Markets (${markets.length}): ${markets.map((m) => m._id).join(', ') || '—'}`);
-          logText(`  Languages (${languages.length}): ${languages.map((l) => `${l.name} (${l._id})`).join(', ') || '—'}`);
-          logText(`  Locales (${locales.length}): ${locales.map((l) => l.tag).join(', ') || '—'}`);
-          logDim('  /account use · /account markets · /account languages · /account locales');
+          logText(`  Markets: ${markets.length} · Languages: ${languages.length} · Locales: ${locales.length}`);
+          logDim('  /account list · /account use · /account markets · /account languages · /account locales');
           break;
         }
 
@@ -1966,6 +2056,14 @@ export function App({ version = VERSION }: { version?: string }) {
             appState.setActiveMode(null);
           }}
           onLog={(text) => logText(`  ${text}`)}
+        />
+      )}
+
+      {appState.activeMode === 'confirm' && confirmRef.current && (
+        <Confirm
+          message={confirmRef.current.message}
+          onYes={handleConfirmYes}
+          onNo={handleConfirmNo}
         />
       )}
 

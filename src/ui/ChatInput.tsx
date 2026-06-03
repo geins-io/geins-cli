@@ -26,7 +26,7 @@ const COMMANDS: Record<string, string> = {
 };
 
 const SUBCOMMANDS: Record<string, string[]> = {
-  account: ['use', 'markets', 'languages', 'locales'],
+  account: ['list', 'use', 'markets', 'languages', 'locales'],
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
   product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'categories', 'relation-types', 'relations', 'parameters', 'help'],

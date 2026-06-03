@@ -14,6 +14,16 @@ export interface RequestOptions {
 
 let cachedSession: StoredSession | null = null;
 
+// Per-invocation override for the x-account-key (the v2 account). When set, it takes
+// precedence over the stored session's accountKey without rewriting the session — used by
+// the headless `--account-name` flag so a single command can target another account.
+let accountKeyOverride: string | null = null;
+
+/** Override the v2 account (x-account-key) for subsequent requests. Pass null to clear. */
+export function setAccountKeyOverride(accountKey: string | null): void {
+  accountKeyOverride = accountKey;
+}
+
 async function getSession(): Promise<StoredSession> {
   if (!cachedSession) {
     cachedSession = await loadSession();
@@ -60,8 +70,9 @@ export async function request<T = unknown>(path: string, options?: RequestOption
     'Authorization': `Bearer ${session.accessToken}`,
     'Content-Type': 'application/json',
   };
-  if (session.accountKey) {
-    headers['x-account-key'] = session.accountKey;
+  const accountKey = accountKeyOverride ?? session.accountKey;
+  if (accountKey) {
+    headers['x-account-key'] = accountKey;
   }
 
   const signal = options?.signal ?? getActiveSignal();
