@@ -1,7 +1,8 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { existsSync } from 'node:fs';
+import { loadCredentialsStore } from '../config/store';
 
 const COMMANDS: Record<string, string> = {
   help: 'Show available commands',
@@ -14,6 +15,7 @@ const COMMANDS: Record<string, string> = {
   order: 'Order commands',
   copilot: 'Toggle AI copilot mode',
   new: 'New conversation',
+  memory: 'Inspect or clear copilot memory',
   api: 'Raw API request',
   management: 'Management API',
   output: 'Dump responses to a folder',
@@ -31,6 +33,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
   copilot: ['provider', 'set'],
+  memory: ['clear'],
 };
 
 const ARG_HINTS: Record<string, Record<string, string>> = {
@@ -145,6 +148,11 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   const attachmentsRef = useRef<Map<string, string>>(new Map());
   const attachCounter = useRef(0);
   const prevValueRef = useRef('');
+  // Inline saved-API-key picker: shown under the input when the command is exactly `/apikey`.
+  // `null` = not loaded / not in picker. Arrow keys move `apiKeyIndex`; enter switches the active key.
+  const [apiKeyNames, setApiKeyNames] = useState<string[] | null>(null);
+  const [apiKeyActive, setApiKeyActive] = useState<string | null>(null);
+  const [apiKeyIndex, setApiKeyIndex] = useState(0);
 
   // Commands offerable right now (`/new` only makes sense once a copilot is active).
   const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new');
@@ -156,6 +164,35 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   };
 
   const matches = showMenu ? (cycleAll ? available : getMatches(value)) : [];
+
+  // The command is exactly `/apikey` (no subcommand, no trailing space) → offer the inline
+  // key picker. A trailing space or any subcommand text drops out of this and restores hints.
+  const apiKeyIntent = value.toLowerCase() === '/apikey';
+  const inApiKeyPicker = apiKeyIntent && apiKeyNames !== null && apiKeyNames.length > 0;
+
+  // Load the saved profiles whenever the picker is invoked; clear them when it isn't.
+  useEffect(() => {
+    if (!apiKeyIntent) {
+      if (apiKeyNames !== null) setApiKeyNames(null);
+      return;
+    }
+    let cancelled = false;
+    loadCredentialsStore()
+      .then(store => {
+        if (cancelled) return;
+        const names = Object.keys(store.profiles);
+        setApiKeyNames(names);
+        setApiKeyActive(store.active);
+        setApiKeyIndex(store.active ? Math.max(0, names.indexOf(store.active)) : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setApiKeyNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKeyIntent]);
 
   useInput((input, key) => {
     // While an operation is in flight, Ctrl-C is reserved for cancelling it — App's
@@ -177,6 +214,18 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
     if (disabled) {
       if (key.escape && onCancel) onCancel();
       return;
+    }
+    // Inline API-key picker takes the arrows first; enter is handled by handleSubmit.
+    if (inApiKeyPicker) {
+      const count = apiKeyNames!.length;
+      if (key.upArrow) {
+        setApiKeyIndex(i => (i <= 0 ? count - 1 : i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setApiKeyIndex(i => (i >= count - 1 ? 0 : i + 1));
+        return;
+      }
     }
     if (key.upArrow && showMenu && matches.length > 0) {
       setMenuIndex(i => (i <= 0 ? matches.length - 1 : i - 1));
@@ -294,6 +343,20 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   };
 
   const handleSubmit = (input: string) => {
+    // In the inline key picker, enter switches to the highlighted profile. Reuse the existing
+    // `/apikey use <name>` command path so the switch + cache reset + logging stay in one place.
+    if (inApiKeyPicker) {
+      const name = apiKeyNames![apiKeyIndex] ?? apiKeyNames![0]!;
+      onSubmit(`/apikey use ${name}`);
+      setValue('');
+      prevValueRef.current = '';
+      setHistoryIndex(-1);
+      setShowMenu(false);
+      setMenuIndex(0);
+      setCycleAll(false);
+      setApiKeyNames(null);
+      return;
+    }
     let submitted = showMenu && matches.length > 0 ? `/${matches[menuIndex]!}` : input;
     // Expand chips back to the real path (quoted so spaces survive tokenization).
     for (const [placeholder, realPath] of attachmentsRef.current) {
@@ -342,7 +405,8 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
 
   const hints = getHints();
 
-  const menuVisible = showMenu && matches.length > 0;
+  // The lone `/apikey` command entry yields to the inline key picker.
+  const menuVisible = showMenu && matches.length > 0 && !apiKeyIntent;
 
   return (
     <Box flexDirection="column">
@@ -368,6 +432,32 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
                 <Text dimColor>{COMMANDS[cmd]}</Text>
               </Box>
             ))}
+          </Box>
+          <Text dimColor>{separator}</Text>
+        </>
+      ) : null}
+      {apiKeyIntent && apiKeyNames !== null ? (
+        <>
+          <Box flexDirection="column" paddingX={1}>
+            {apiKeyNames.length === 0 ? (
+              <Text dimColor>No saved API keys — /apikey add to add one</Text>
+            ) : (
+              <>
+                <Text dimColor>↑↓ select · enter switch · type a subcommand to manage</Text>
+                {apiKeyNames.map((name, i) => {
+                  const isSel = i === apiKeyIndex;
+                  const isActive = name === apiKeyActive;
+                  return (
+                    <Box key={name} gap={1}>
+                      <Text color={isSel ? 'cyan' : undefined} bold={isSel}>{isSel ? '▸' : ' '}</Text>
+                      <Text color={isSel ? 'cyan' : isActive ? 'green' : undefined} bold={isSel}>
+                        {isActive ? '●' : '○'} {name}
+                      </Text>
+                    </Box>
+                  );
+                })}
+              </>
+            )}
           </Box>
           <Text dimColor>{separator}</Text>
         </>

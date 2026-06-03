@@ -15,6 +15,14 @@ export async function loadContext(): Promise<CommandContext> {
   };
 }
 
+export async function clearCommandContext(): Promise<void> {
+  await writeJsonSafe(PATHS.commandContext, {
+    recentWorkflowIds: [],
+    recentApiResponses: [],
+    updatedAt: Date.now(),
+  });
+}
+
 export async function trackWorkflow(id: string, data?: Record<string, unknown>): Promise<void> {
   const ctx = await loadContext();
   ctx.lastWorkflowId = id;

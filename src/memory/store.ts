@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile, appendFile, stat, rename, access } from 'node:fs/promises';
+import { loadSession, loadCredentialsStore } from '../config/store.ts';
 
 const BASE_DIR = join(homedir(), '.config', 'geins', 'memory');
 const SHARED_DIR = join(BASE_DIR, '_shared');
@@ -15,6 +16,32 @@ export function setMemoryAccount(key?: string): void {
 
 export function getMemoryAccount(): string | undefined {
   return currentAccountKey;
+}
+
+/** Keep account-key segments filesystem-safe and free of the `__` composite separator. */
+function sanitizeSegment(s: string): string {
+  return s.replace(/[^A-Za-z0-9.-]+/g, '-');
+}
+
+/**
+ * The composite memory-account key: `{v2SessionAccountKey}__{activeApikeyProfile}`.
+ * Either part is omitted when absent; returns `undefined` when neither exists (→ the
+ * `_shared` bucket). Memory is keyed by this so chat history, command context, and
+ * knowledge stay compartmentalized per account and never leak across an /apikey switch.
+ */
+export async function resolveMemoryAccountKey(): Promise<string | undefined> {
+  const [session, creds] = await Promise.all([loadSession(), loadCredentialsStore()]);
+  const parts = [session?.accountKey, creds.active]
+    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+    .map(sanitizeSegment);
+  return parts.length ? parts.join('__') : undefined;
+}
+
+/** Resolve the composite key for the active session + apikey profile and apply it. */
+export async function applyMemoryAccount(): Promise<string | undefined> {
+  const key = await resolveMemoryAccountKey();
+  setMemoryAccount(key);
+  return key;
 }
 
 function getMemoryDir(): string {

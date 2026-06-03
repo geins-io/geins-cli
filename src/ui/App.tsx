@@ -35,7 +35,9 @@ import {
   loadKnowledge,
   clearKnowledge,
   clearHistory,
+  clearCommandContext,
   cacheManifest,
+  applyMemoryAccount,
 } from '../memory/index.ts';
 import {
   listWorkflows,
@@ -212,6 +214,7 @@ export function App({ version = VERSION }: { version?: string }) {
   const handleApiKeyComplete = useCallback(async (credentials: ApiCredentials) => {
     const name = await addCredentials(credentials);
     resetCredentialsCache();
+    await applyMemoryAccount();
     appState.setActiveMode(null);
     logSuccess(`  ✓ Credentials '${name}' saved, validated, and activated.`);
   }, [appState, logSuccess]);
@@ -226,6 +229,7 @@ export function App({ version = VERSION }: { version?: string }) {
     appState.setApiKeyPicker(null);
     await useCredentials(name);
     resetCredentialsCache();
+    await applyMemoryAccount();
     logSuccess(`  ✓ Switched to '${name}'.`);
   }, [appState, logSuccess]);
 
@@ -497,7 +501,7 @@ export function App({ version = VERSION }: { version?: string }) {
             logText('  /new        New conversation         Clear copilot history');
           }
           logText('  /history    Search past sessions     /history <query>');
-          logText('  /memory     View learned knowledge   /memory clear');
+          logText('  /memory     View learned knowledge   /memory clear (start fresh)');
           logText('  /theme      Switch dark/light mode');
           logText('  /clear      Clear the screen');
           logText('  /exit       Exit the CLI');
@@ -540,6 +544,7 @@ export function App({ version = VERSION }: { version?: string }) {
             }
             if (await useCredentials(name)) {
               resetCredentialsCache();
+              await applyMemoryAccount();
               logSuccess(`  ✓ Switched to '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -549,6 +554,7 @@ export function App({ version = VERSION }: { version?: string }) {
             if (!name) { logError('  Usage: /apikey remove <name>'); break; }
             if (await removeCredentials(name)) {
               resetCredentialsCache();
+              await applyMemoryAccount();
               logSuccess(`  ✓ Removed '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -556,6 +562,7 @@ export function App({ version = VERSION }: { version?: string }) {
           } else if (action === 'clear') {
             await clearCredentials();
             resetCredentialsCache();
+            await applyMemoryAccount();
             logSuccess('  ✓ All API credentials cleared.');
           } else {
             logError(`  Unknown subcommand: apikey ${action}`);
@@ -1732,8 +1739,14 @@ export function App({ version = VERSION }: { version?: string }) {
         case 'memory': {
           const sub = args[0]?.toLowerCase();
           if (sub === 'clear') {
+            // Start fresh for the active account: wipe the in-memory copilot buffer plus
+            // all persisted memory (chat history, command context, knowledge) for this bucket.
+            clearConversationHistory();
+            await clearHistory();
+            await clearCommandContext();
             await clearKnowledge();
-            logSuccess('  ✓ Knowledge base cleared');
+            appState.setChatComponents([]);
+            logSuccess('  ✓ Memory cleared — starting fresh');
             break;
           }
           const kb = await loadKnowledge();

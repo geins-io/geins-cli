@@ -2,8 +2,10 @@ import { mkdir, appendFile, writeFile } from 'node:fs/promises';
 import { join, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig } from '../config/store.ts';
+import { getMemoryAccount, resolveMemoryAccountKey } from '../memory/store.ts';
 
 let cachedDir: string | null | undefined; // undefined = not yet resolved
+let cachedAccountSeg: string | undefined; // disk-resolved fallback (cli/subprocess has no in-process account)
 let counter = 0;
 
 function expand(dir: string): string {
@@ -32,14 +34,39 @@ async function resolveDir(): Promise<string | null> {
   return cachedDir;
 }
 
-/** The resolved output dir (override > GEINS_OUTPUT_DIR > config), or null if disabled. */
+/**
+ * The base output dir (override > GEINS_OUTPUT_DIR > config), or null if disabled.
+ * This is the UN-nested root — used for status display and as the GEINS_OUTPUT_DIR
+ * handed to copilot subprocesses (they re-nest once, rather than double-nesting).
+ */
 export async function getOutputDir(): Promise<string | null> {
   return resolveDir();
 }
 
-/** Resolve the output dir and create it if set. Returns the absolute path, or null if disabled. */
+/**
+ * The per-account subfolder under the base, mirroring the memory layout
+ * (`<base>/<composite-account-key>`, or `<base>/_shared` when no account is active).
+ * Prefer the in-process account (reflects live /apikey switches in the TUI); fall back
+ * to resolving from disk for the direct CLI / copilot subprocess which never applies it.
+ */
+async function accountSegment(): Promise<string> {
+  const live = getMemoryAccount();
+  if (live) return live;
+  if (cachedAccountSeg === undefined) {
+    cachedAccountSeg = (await resolveMemoryAccountKey()) ?? '_shared';
+  }
+  return cachedAccountSeg;
+}
+
+/** The account-nested write dir (`<base>/<account>`), or null if output is disabled. */
+export async function getAccountOutputDir(): Promise<string | null> {
+  const base = await resolveDir();
+  return base ? join(base, await accountSegment()) : null;
+}
+
+/** Resolve the account-nested output dir and create it if set. Returns the absolute path, or null if disabled. */
 export async function ensureOutputDir(): Promise<string | null> {
-  const dir = await resolveDir();
+  const dir = await getAccountOutputDir();
   if (!dir) return null;
   try {
     await mkdir(dir, { recursive: true });
@@ -78,7 +105,7 @@ export interface ResponseRecord {
  */
 export async function recordResponse(record: ResponseRecord): Promise<string | null> {
   try {
-    const dir = await resolveDir();
+    const dir = await getAccountOutputDir();
     if (!dir) return null;
     await mkdir(dir, { recursive: true });
 

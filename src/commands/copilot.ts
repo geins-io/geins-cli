@@ -1,5 +1,5 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
-import { getOutputDir, ensureOutputDir } from '../output/sink.ts';
+import { getOutputDir, getAccountOutputDir, ensureOutputDir } from '../output/sink.ts';
 import { existsSync, statSync } from 'node:fs';
 import { getActiveSignal } from '../api/abort.ts';
 import { $ } from 'bun';
@@ -251,7 +251,8 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
   );
 
   const outDir = await getOutputDir();
-  const effectiveDir = outDir ?? process.cwd();
+  // Show the account-nested folder (the copilot's actual cwd), not the un-nested base.
+  const effectiveDir = (await getAccountOutputDir()) ?? process.cwd();
   const outputSection = outDir
     ? `Output folder: ${effectiveDir}`
     : `Output folder: ${effectiveDir} (the directory geins was launched from; set a fixed one with \`geins output <dir>\`)`;
@@ -352,10 +353,14 @@ function extractResultFromStreamJson(output: string): string {
  * runs (so their dumps are written to the same place, not re-resolved relatively).
  */
 async function copilotProcOptions(): Promise<{ cwd: string; env: Record<string, string | undefined> }> {
-  const outDir = await ensureOutputDir();
+  // cwd is the account-nested dir so files the copilot writes itself land in the account
+  // folder; GEINS_OUTPUT_DIR carries the UN-nested base so geins subprocesses re-nest once
+  // (to the same place) rather than double-nesting under <base>/<account>/<account>.
+  const baseDir = await getOutputDir();
+  const accountDir = await ensureOutputDir();
   return {
-    cwd: outDir ?? process.cwd(),
-    env: outDir ? { ...process.env, GEINS_OUTPUT_DIR: outDir } : { ...process.env },
+    cwd: accountDir ?? process.cwd(),
+    env: baseDir ? { ...process.env, GEINS_OUTPUT_DIR: baseDir } : { ...process.env },
   };
 }
 

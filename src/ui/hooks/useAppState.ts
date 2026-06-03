@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { loadSession } from '../../auth/session.ts';
 import { loadConfig, saveConfig } from '../../config/store.ts';
-import { startSession, endSession, setMemoryAccount } from '../../memory/index.ts';
+import { startSession, endSession, applyMemoryAccount } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 
 export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | null;
@@ -54,17 +54,18 @@ export function useAppState() {
 
   // Load session + config on mount, start memory session
   useEffect(() => {
-    Promise.all([loadSession(), loadConfig()]).then(([session, config]) => {
+    Promise.all([loadSession(), loadConfig()]).then(async ([session, config]) => {
+      // Scope memory by the composite (v2 session + active apikey profile) key before
+      // starting the session log, so per-account data never leaks across accounts.
+      await applyMemoryAccount();
       if (session) {
         setStatus(s => ({
           ...s,
           user: session.user.email,
           account: session.accountKey,
         }));
-        setMemoryAccount(session.accountKey);
         startSession(session.accountKey);
       } else {
-        setMemoryAccount();
         startSession();
       }
       if (config.theme) {

@@ -1,5 +1,5 @@
 import { loadSession } from './auth/session.ts';
-import { setMemoryAccount } from './memory/index.ts';
+import { applyMemoryAccount } from './memory/index.ts';
 import { loadConfig, saveConfig } from './config/store.ts';
 import { printBanner, animateStartup } from './output/banner.ts';
 import { cyan, dim, red, green, bold, setTheme, gray } from './output/color.ts';
@@ -386,7 +386,7 @@ export async function startRepl(): Promise<void> {
   await animateStartup();
 
   const session = await loadSession();
-  setMemoryAccount(session?.accountKey);
+  await applyMemoryAccount();
   printBanner(
     VERSION,
     session?.user.email || undefined,
