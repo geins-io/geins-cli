@@ -17,7 +17,7 @@ import { setActiveSignal } from '../api/abort.ts';
 import { setOutputDir, getOutputDir } from '../output/sink.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
-import { request } from '../api/client.ts';
+import { request, resetSessionCache } from '../api/client.ts';
 import { getApiUrl } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
@@ -72,7 +72,7 @@ import {
   type OrderUpdate,
 } from '../commands/orders.ts';
 import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
-import { managementRequest, isHttpMethod, methods as managementMethods } from '../commands/management.ts';
+import { listMarkets, listLanguages, listChannels, listLocales, marketName, listUserAccounts } from '../commands/account.ts';
 
 const VERSION = '0.1.0';
 
@@ -179,7 +179,9 @@ export function App({ version = VERSION }: { version?: string }) {
       appState.updateStatus({
         user: user.email ?? '',
         account: accountKey,
+        accountName,
         connected: true,
+        authState: 'logged-in',
       });
       logSuccess(`  ✓ Logged in as ${user.email ?? name}`);
     } catch (err) {
@@ -204,6 +206,39 @@ export function App({ version = VERSION }: { version?: string }) {
       await finalizeLogin(appState.pendingAuth, accountKey);
     }
   }, [appState.pendingAuth, finalizeLogin]);
+
+  // The account picker is shared with login. This ref flags that it was opened by /account use
+  // (a switch while already logged in) so cancel keeps the current account instead of defaulting
+  // to the first, and select rewrites only the account — no re-auth (the bearer token is
+  // account-agnostic; x-account-key selects the account per request).
+  const switchingAccountRef = useRef(false);
+
+  // Rewrite the stored session's account, drop the client's session cache so the next request
+  // sends the new x-account-key, and re-scope memory to the new account bucket.
+  const applyAccountSwitch = useCallback(async (accountKey: string, accountName: string) => {
+    const session = await loadSession();
+    if (!session) { logError('  Not logged in. Run /login first.'); return; }
+    await saveSession({ ...session, accountKey, accountName });
+    resetSessionCache();
+    await applyMemoryAccount();
+    appState.updateStatus({ account: accountKey, accountName });
+    logSuccess(`  ✓ Switched to ${accountName || accountKey}`);
+  }, [appState, logSuccess, logError]);
+
+  const handleAccountSwitchSelected = useCallback(async (accountKey: string) => {
+    switchingAccountRef.current = false;
+    const accountName = appState.pendingAuth?.accounts?.find(a => a.accountKey === accountKey)?.displayName ?? '';
+    appState.setActiveMode(null);
+    appState.setPendingAuth(null);
+    await applyAccountSwitch(accountKey, accountName);
+  }, [appState, applyAccountSwitch]);
+
+  const handleAccountSwitchCancel = useCallback(() => {
+    switchingAccountRef.current = false;
+    appState.setActiveMode(null);
+    appState.setPendingAuth(null);
+    logDim('  Account unchanged.');
+  }, [appState, logDim]);
 
   const handleLoginCancel = useCallback(() => {
     logDim('  Login cancelled.');
@@ -489,12 +524,12 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /login      Authenticate with Geins');
           logText('  /logout     Clear credentials and exit');
           logText('  /whoami     Show current user');
+          logText('  /account    Account settings        /account use | markets | languages | locales');
           logText('  /apikey     Manage API accounts         /apikey list | add | use <name>');
           logText('  /workflow   Workflow commands       /workflow help');
           logText('  /product    Product commands        /product get <id> | list | items <id> | variants <id>');
           logText('  /order      Order commands          /order list | get <id> | statuses | status <id> <s>');
           logText('  /api        Raw API request         /api GET /products');
-          logText('  /management Management API           /management GET /API/Market/List');
           logText('  /output     Dump responses to folder   /output ./out | /output off');
           logText('  /copilot    Toggle AI copilot mode  /copilot provider');
           if (appState.copilotActive) {
@@ -545,6 +580,7 @@ export function App({ version = VERSION }: { version?: string }) {
             if (await useCredentials(name)) {
               resetCredentialsCache();
               await applyMemoryAccount();
+              appState.updateStatus({ apiAccount: name });
               logSuccess(`  ✓ Switched to '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -555,6 +591,8 @@ export function App({ version = VERSION }: { version?: string }) {
             if (await removeCredentials(name)) {
               resetCredentialsCache();
               await applyMemoryAccount();
+              const store = await loadCredentialsStore();
+              appState.updateStatus({ apiAccount: store.active ?? '' });
               logSuccess(`  ✓ Removed '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -563,6 +601,7 @@ export function App({ version = VERSION }: { version?: string }) {
             await clearCredentials();
             resetCredentialsCache();
             await applyMemoryAccount();
+            appState.updateStatus({ apiAccount: '' });
             logSuccess('  ✓ All API credentials cleared.');
           } else {
             logError(`  Unknown subcommand: apikey ${action}`);
@@ -573,7 +612,7 @@ export function App({ version = VERSION }: { version?: string }) {
 
         case 'logout':
           await clearSession();
-          appState.updateStatus({ user: '', account: '', connected: false });
+          appState.updateStatus({ user: '', account: '', connected: false, authState: 'logged-out' });
           logSuccess('  ✓ Logged out.');
           break;
 
@@ -591,6 +630,93 @@ export function App({ version = VERSION }: { version?: string }) {
             logText(`  Account: ${label}`);
           }
           if (session.user.roles.length > 0) logText(`  Roles: ${session.user.roles.join(', ')}`);
+          break;
+        }
+
+        case 'account': {
+          const sub = args[0]?.toLowerCase();
+          const vatPct = (rate?: number) => (rate != null ? `VAT ${+(rate * 100).toFixed(2)}%` : null);
+
+          // Switch the active account — same picker as login. `/account use` opens the picker;
+          // `/account use <name|key>` switches directly without it.
+          if (sub === 'use' || sub === 'switch') {
+            const session = await loadSession();
+            if (!session) { logError('  Not logged in. Run /login first.'); break; }
+            appState.setLiveComponent(
+              <Box key="account-spinner" gap={1} paddingX={1}>
+                <Spinner type="dots" />
+                <Text dimColor>Loading accounts…</Text>
+              </Box>,
+            );
+            let accounts;
+            try {
+              accounts = await listUserAccounts();
+            } catch (err) {
+              appState.setLiveComponent(null);
+              logError(`  ${formatError(err)}`);
+              break;
+            }
+            appState.setLiveComponent(null);
+            if (accounts.length === 0) { logDim('  No accounts available.'); break; }
+
+            // Direct switch when a name/key is given (no picker).
+            const target = args[1];
+            if (target) {
+              const t = target.toLowerCase();
+              const match = accounts.find(a => a.name.toLowerCase() === t || a.accountKey === target);
+              if (!match) { logError(`  Unknown account: ${target}`); break; }
+              await applyAccountSwitch(match.accountKey, match.name);
+              break;
+            }
+
+            if (accounts.length === 1) { logDim(`  Only one account available (${accounts[0]!.name}).`); break; }
+
+            // Open the shared login picker in switch mode.
+            switchingAccountRef.current = true;
+            appState.setPendingAuth({
+              accessToken: session.accessToken,
+              refreshToken: session.refreshToken,
+              accounts: accounts.map(a => ({ accountKey: a.accountKey, displayName: a.name, roles: a.roles })),
+            });
+            appState.setActiveMode('select-account');
+            break;
+          }
+
+          if (sub === 'languages' || sub === 'language' || sub === 'langs') {
+            const languages = await listLanguages();
+            if (languages.length === 0) { logDim('  No languages.'); break; }
+            for (const l of languages) logText(`  ${l.name} (${l._id})${l.active === false ? '  (inactive)' : ''}`);
+            logDim(`  ${languages.length} language${languages.length === 1 ? '' : 's'}`);
+            break;
+          }
+
+          if (sub === 'locales' || sub === 'locale') {
+            const locales = await listLocales();
+            if (locales.length === 0) { logDim('  No locales.'); break; }
+            for (const l of locales) logText(`  ${l.tag}${l.languageName ? `  ${l.languageName}` : ''}${l.channel ? `  (${l.channel})` : ''}`);
+            logDim(`  ${locales.length} locale${locales.length === 1 ? '' : 's'}`);
+            break;
+          }
+
+          if (sub === 'markets' || sub === 'market') {
+            const markets = await listMarkets();
+            if (markets.length === 0) { logDim('  No markets.'); break; }
+            for (const m of markets) {
+              const bits = [m.currency?._id, vatPct(m.standardVatRate)].filter(Boolean).join(' · ');
+              logText(`  ${marketName(m)}${bits ? `  (${bits})` : ''}${m.active === false ? '  (inactive)' : ''}`);
+            }
+            logDim(`  ${markets.length} market${markets.length === 1 ? '' : 's'}`);
+            break;
+          }
+
+          // Default: an overview of all three. Fetch channels + languages once and reuse
+          // them for the locale derivation to avoid duplicate calls.
+          const [markets, languages, channels] = await Promise.all([listMarkets(), listLanguages(), listChannels()]);
+          const locales = await listLocales({ channels, languages });
+          logText(`  Markets (${markets.length}): ${markets.map((m) => m._id).join(', ') || '—'}`);
+          logText(`  Languages (${languages.length}): ${languages.map((l) => `${l.name} (${l._id})`).join(', ') || '—'}`);
+          logText(`  Locales (${locales.length}): ${locales.map((l) => l.tag).join(', ') || '—'}`);
+          logDim('  /account use · /account markets · /account languages · /account locales');
           break;
         }
 
@@ -1592,68 +1718,6 @@ export function App({ version = VERSION }: { version?: string }) {
           break;
         }
 
-        case 'management': {
-          const sub = args[0] ?? '';
-          const methodNames = Object.keys(managementMethods);
-
-          if (!sub || sub.toLowerCase() === 'help') {
-            logText('');
-            logText("  /management <METHOD> <path> [--body '<json>']   Raw Management API call");
-            if (methodNames.length > 0) {
-              logText('');
-              for (const name of methodNames) {
-                const m = managementMethods[name]!;
-                logText(`  /management ${name}${m.usage ? ` ${m.usage}` : ''}    ${m.description}`);
-              }
-            }
-            logText('');
-            break;
-          }
-
-          // Raw passthrough: /management GET /API/Market/List
-          if (isHttpMethod(sub)) {
-            const method = sub.toUpperCase();
-            const path = args[1];
-            if (!path) { logText('  Usage: /management <METHOD> <path>'); break; }
-            const bodyIdx = args.indexOf('--body');
-            let body: unknown;
-            if (bodyIdx !== -1 && args[bodyIdx + 1]) {
-              try { body = JSON.parse(args[bodyIdx + 1]!); } catch {
-                logError('  Invalid JSON in --body');
-                break;
-              }
-            }
-            appState.setLiveComponent(
-              <Box key="mgmt-spinner" gap={1} paddingX={1}>
-                <Spinner type="dots" />
-                <Text dimColor>Requesting {method} {path}...</Text>
-              </Box>,
-            );
-            const data = await managementRequest(method, path, body);
-            appState.setLiveComponent(null);
-            logText(`  ${JSON.stringify(data, null, 2)}`);
-            break;
-          }
-
-          // Named method
-          const named = managementMethods[sub.toLowerCase()];
-          if (!named) {
-            logError(`  Unknown method: ${sub}`);
-            logDim('  Type /management help for available methods');
-            break;
-          }
-          appState.setLiveComponent(
-            <Box key="mgmt-spinner" gap={1} paddingX={1}>
-              <Spinner type="dots" />
-              <Text dimColor>Calling {sub}...</Text>
-            </Box>,
-          );
-          const data = await named.run(args.slice(1));
-          appState.setLiveComponent(null);
-          logText(`  ${JSON.stringify(data, null, 2)}`);
-          break;
-        }
-
         case 'output': {
           const sub = args[0];
           if (!sub || sub.toLowerCase() === 'status') {
@@ -1698,6 +1762,16 @@ export function App({ version = VERSION }: { version?: string }) {
           } else {
             appState.setActiveMode('select-copilot');
           }
+          break;
+        }
+
+        case 'provider': {
+          // In copilot mode, /provider mirrors /copilot provider — open the provider picker.
+          if (appState.copilotActive) {
+            appState.setActiveMode('select-copilot');
+            break;
+          }
+          logDim('  Copilot mode is not active. Run /copilot to enable it.');
           break;
         }
 
@@ -1811,9 +1885,12 @@ export function App({ version = VERSION }: { version?: string }) {
         version={version}
         user={appState.status.user || undefined}
         account={appState.status.account || undefined}
+        accountName={appState.status.accountName || undefined}
+        apiAccount={appState.status.apiAccount || undefined}
+        authState={appState.status.authState}
       />
     ),
-    [version, appState.status.user, appState.status.account],
+    [version, appState.status.user, appState.status.account, appState.status.accountName, appState.status.apiAccount, appState.status.authState],
   );
 
   if (!appState.ready) {
@@ -1870,8 +1947,8 @@ export function App({ version = VERSION }: { version?: string }) {
       {appState.activeMode === 'select-account' && appState.pendingAuth?.accounts && (
         <SelectAccount
           accounts={appState.pendingAuth.accounts}
-          onSelect={handleAccountSelected}
-          onCancel={() => handleAccountSelected(appState.pendingAuth!.accounts![0]!.accountKey)}
+          onSelect={switchingAccountRef.current ? handleAccountSwitchSelected : handleAccountSelected}
+          onCancel={switchingAccountRef.current ? handleAccountSwitchCancel : () => handleAccountSelected(appState.pendingAuth!.accounts![0]!.accountKey)}
         />
       )}
 

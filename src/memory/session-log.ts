@@ -35,6 +35,10 @@ export async function logEntry(entry: Omit<SessionEntry, 'timestamp'>): Promise<
   entryCount++;
 }
 
+export function getCurrentSessionId(): string | null {
+  return currentSessionId;
+}
+
 export async function endSession(): Promise<void> {
   if (!currentSessionId || !currentSessionPath) return;
   const index = await loadIndex();

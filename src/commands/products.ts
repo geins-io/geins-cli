@@ -128,7 +128,7 @@ export interface VariantGroup {
   Products?: Product[];
 }
 
-interface Envelope<T> {
+export interface Envelope<T> {
   Resource: T;
   Message?: string;
   Details?: string[];
@@ -905,13 +905,17 @@ export interface BrandQuery {
   ExternalIds?: string[];
 }
 
-/** POST /API/Brand/Query — list/query brands (an empty body returns all). */
+/**
+ * POST /API/Brand/Query — list/query brands (an empty body returns all).
+ * Unlike GET /API/Brand/{id}, this endpoint returns a bare array rather than an
+ * Envelope, so accept both shapes.
+ */
 export async function queryBrands(query: BrandQuery = {}): Promise<Brand[]> {
-  const envelope = await mgmtRequest<Envelope<Brand[]>>('/API/Brand/Query', {
+  const res = await mgmtRequest<Brand[] | Envelope<Brand[]>>('/API/Brand/Query', {
     method: 'POST',
     body: query,
   });
-  return envelope.Resource ?? [];
+  return Array.isArray(res) ? res : (res.Resource ?? []);
 }
 
 /** GET /API/Brand/{id} — one brand. */
@@ -983,13 +987,17 @@ export interface CategoryQuery {
   CategoryIds?: number[];
 }
 
-/** POST /API/Category/Query — list/query categories (an empty body returns all). */
+/**
+ * POST /API/Category/Query — list/query categories (an empty body returns all).
+ * Like /API/Brand/Query, this endpoint returns a bare array rather than an
+ * Envelope, so accept both shapes.
+ */
 export async function queryCategories(query: CategoryQuery = {}): Promise<Category[]> {
-  const envelope = await mgmtRequest<Envelope<Category[]>>('/API/Category/Query', {
+  const res = await mgmtRequest<Category[] | Envelope<Category[]>>('/API/Category/Query', {
     method: 'POST',
     body: query,
   });
-  return envelope.Resource ?? [];
+  return Array.isArray(res) ? res : (res.Resource ?? []);
 }
 
 /** GET /API/Category/{id} — one category. */

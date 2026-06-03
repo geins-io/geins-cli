@@ -9,15 +9,16 @@ const COMMANDS: Record<string, string> = {
   login: 'Authenticate with Geins',
   logout: 'Clear credentials',
   whoami: 'Show current user',
+  account: 'Account settings (markets, languages)',
   apikey: 'Set Geins API credentials',
   workflow: 'Workflow commands',
   product: 'Product commands',
   order: 'Order commands',
   copilot: 'Toggle AI copilot mode',
+  provider: 'Switch copilot provider',
   new: 'New conversation',
   memory: 'Inspect or clear copilot memory',
   api: 'Raw API request',
-  management: 'Management API',
   output: 'Dump responses to a folder',
   theme: 'Switch dark/light mode',
   clear: 'Clear the screen',
@@ -25,18 +26,21 @@ const COMMANDS: Record<string, string> = {
 };
 
 const SUBCOMMANDS: Record<string, string[]> = {
+  account: ['use', 'markets', 'languages', 'locales'],
   workflow: ['list', 'get', 'run', 'create', 'update', 'logs', 'manifest', 'enable', 'disable', 'vars', 'help'],
   apikey: ['add', 'list', 'use', 'remove', 'clear'],
   product: ['get', 'list', 'query', 'items', 'variants', 'images', 'brands', 'categories', 'relation-types', 'relations', 'parameters', 'help'],
   order: ['list', 'get', 'query', 'count', 'statuses', 'create', 'validate', 'status', 'update', 'cancel-row', 'comment', 'transaction', 'set-paid', 'delete', 'help'],
   api: ['GET', 'POST', 'PUT', 'DELETE'],
-  management: ['GET', 'POST', 'PUT', 'DELETE', 'help'],
   output: ['status', 'off'],
   copilot: ['provider', 'set'],
   memory: ['clear'],
 };
 
 const ARG_HINTS: Record<string, Record<string, string>> = {
+  account: {
+    use: '[<name>]  (blank → arrow-key picker)',
+  },
   workflow: {
     get: '<id>',
     run: '<id> [--body \'<json>\'] [--watch]',
@@ -84,12 +88,6 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     POST: '<path> [--body \'<json>\']',
     PUT: '<path> [--body \'<json>\']',
     DELETE: '<path>',
-  },
-  management: {
-    GET: '/API/...',
-    POST: '/API/... [--body \'<json>\']',
-    PUT: '/API/... [--body \'<json>\']',
-    DELETE: '/API/...',
   },
   copilot: {
     provider: 'claude | codex | gemini | ollama | lmstudio',
@@ -154,8 +152,8 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   const [apiKeyActive, setApiKeyActive] = useState<string | null>(null);
   const [apiKeyIndex, setApiKeyIndex] = useState(0);
 
-  // Commands offerable right now (`/new` only makes sense once a copilot is active).
-  const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new');
+  // Commands offerable right now (`/new` and `/provider` only make sense once a copilot is active).
+  const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new' && c !== 'provider');
 
   const getMatches = (input: string): string[] => {
     const query = input.startsWith('/') ? input.slice(1) : input;

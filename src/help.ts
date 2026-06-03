@@ -39,15 +39,15 @@ export function cliHelpSpec(version: string): CliHelpSpec {
   return {
     name: 'geins',
     version,
-    description: 'CLI for the Geins Commerce Backend. Product/management commands use the live Management API (mgmtapi.geins.io) with API-User credentials set via `apikey`.',
+    description: 'CLI for the Geins Commerce Backend. Product commands use the live Management API (mgmtapi.geins.io) with API-User credentials set via `apikey`.',
     notes: [
       'Direct CLI: `geins <command> <subcommand> [args] [--flags]`. Add --json for raw JSON where supported.',
-      'Live-API commands (product, management) require credentials: `geins apikey set ...`. Pick an account per-invocation with --account <name> or GEINS_ACCOUNT.',
+      'Live-API commands (product) require credentials: `geins apikey set ...`. Pick an account per-invocation with --account <name> or GEINS_ACCOUNT.',
       'Responses are also written to the output folder when one is set (`geins output <dir>`), and --out <dir> targets a single call.',
       ID_TYPE,
     ],
     globalFlags: [
-      { flag: '--account <name>', description: 'Use a specific live-API account (relation/product/management).', env: 'GEINS_ACCOUNT' },
+      { flag: '--account <name>', description: 'Use a specific live-API account (product).', env: 'GEINS_ACCOUNT' },
       { flag: '--out <dir>', description: 'Dump responses + a request log to <dir>.', env: 'GEINS_OUTPUT_DIR' },
       { flag: '--json', description: 'Force JSON output where supported.' },
       { flag: '--help', description: 'Show help. Add --json (or --llm) for this machine-readable command tree.' },
@@ -55,6 +55,14 @@ export function cliHelpSpec(version: string): CliHelpSpec {
     ],
     commands: [
       { name: 'whoami', description: 'Show the current v2 user and account.', usage: 'geins whoami' },
+      { name: 'account', description: 'Show account settings — markets, languages, and locales — via the v2 Account API.', api: 'v2 Account API', subcommands: [
+        { name: 'overview', usage: 'account', description: 'Overview: markets, languages, and locales for the account.' },
+        { name: 'markets', usage: 'account markets [--json]', description: "List market definitions (country-currency, e.g. SE-SEK, with standard VAT rate).", examples: ['geins account markets --json'] },
+        { name: 'languages', usage: 'account languages [--json]', description: "List the account's languages (ISO 639-1 code + name).", examples: ['geins account languages'] },
+        { name: 'locales', usage: 'account locales [--json]', description: 'List locales (BCP-47-style language-country tags, e.g. sv-SE) derived by pairing each channel-market\'s allowed languages with its country.', examples: ['geins account locales'] },
+      ] },
+      { name: 'ask', description: 'Ask the copilot a question headlessly (requires a configured copilot). Persists to chat history.', usage: 'geins ask "<prompt>" [-c|--continue] [--json]', examples: ['geins ask "list 3 products"', 'geins ask "and the cheapest one?" -c'] },
+      { name: 'resume', description: 'Print a past session transcript. With no id, lists recent sessions to pick from.', usage: 'geins resume [<id>] [--json]', examples: ['geins resume', 'geins resume 1717400000000 --json'] },
       { name: 'apikey', description: 'Manage live Management/Merchant API credentials (per-account profiles).', subcommands: [
         { name: 'set', usage: 'apikey set --username <u> --mgmt-key <k> --mgmt-password <p> --merchant-key <k>', description: 'Add/validate a credential profile (keyed by management key). Validates both APIs.' },
         { name: 'list', usage: 'apikey list', description: 'List credential profiles; ● marks active.' },
@@ -150,9 +158,6 @@ export function cliHelpSpec(version: string): CliHelpSpec {
           { name: 'delete', usage: 'order delete <id>', description: 'Delete an order. DELETE /API/Order/{id}.' },
         ],
       },
-      { name: 'management', description: 'Call the Management API directly (raw passthrough + named methods).', api: 'Management API', subcommands: [
-        { name: 'raw', usage: "management <METHOD> <path> [--body '<json>']", description: 'Raw call, e.g. `management GET /API/Market/List`.', examples: ['geins management GET /API/Market/List'] },
-      ] },
       { name: 'api', description: 'Raw request against the v2 API.', usage: "api <METHOD> <path> [--body '<json>']", examples: ['geins api GET /products'] },
     ],
   };

@@ -1,10 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { loadSession } from '../../auth/session.ts';
-import { loadConfig, saveConfig } from '../../config/store.ts';
+import { checkAuthStatus, type AuthState } from '../../auth/status.ts';
+import { loadConfig, saveConfig, loadCredentialsStore } from '../../config/store.ts';
 import { startSession, endSession, applyMemoryAccount } from '../../memory/index.ts';
 import type { AuthResponse } from '../../auth/login.ts';
+import type { SessionMeta } from '../SelectSession.tsx';
 
-export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | null;
+export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | 'resume-picker' | null;
 
 export interface ApiKeyPicker {
   names: string[];
@@ -14,8 +16,12 @@ export interface ApiKeyPicker {
 export interface AppStatus {
   user: string;
   account: string;
+  accountName: string;
+  apiAccount: string;
   connected: boolean;
   theme: 'dark' | 'light';
+  /** v2 login state, verified against the API on startup ('checking' until resolved). */
+  authState: AuthState | 'checking';
 }
 
 export function useAppState() {
@@ -24,8 +30,11 @@ export function useAppState() {
   const [status, setStatus] = useState<AppStatus>({
     user: '',
     account: '',
+    accountName: '',
+    apiAccount: '',
     connected: true,
     theme: 'dark',
+    authState: 'checking',
   });
 
   // Chat queue: static (frozen) components + live component
@@ -38,6 +47,9 @@ export function useAppState() {
 
   // Profiles for the live-API account picker
   const [apiKeyPicker, setApiKeyPicker] = useState<ApiKeyPicker | null>(null);
+
+  // Sessions offered by the /resume picker
+  const [sessionPicker, setSessionPicker] = useState<SessionMeta[] | null>(null);
 
   // Copilot mode
   const [copilotActive, setCopilotActive] = useState(false);
@@ -54,15 +66,17 @@ export function useAppState() {
 
   // Load session + config on mount, start memory session
   useEffect(() => {
-    Promise.all([loadSession(), loadConfig()]).then(async ([session, config]) => {
+    Promise.all([loadSession(), loadConfig(), loadCredentialsStore()]).then(async ([session, config, credentials]) => {
       // Scope memory by the composite (v2 session + active apikey profile) key before
       // starting the session log, so per-account data never leaks across accounts.
       await applyMemoryAccount();
+      setStatus(s => ({ ...s, apiAccount: credentials.active ?? '' }));
       if (session) {
         setStatus(s => ({
           ...s,
           user: session.user.email,
           account: session.accountKey,
+          accountName: session.accountName ?? '',
         }));
         startSession(session.accountKey);
       } else {
@@ -72,6 +86,12 @@ export function useAppState() {
         setStatus(s => ({ ...s, theme: config.theme! }));
       }
       setReady(true);
+
+      // Verify the session is actually usable — this catches an expired access token or a
+      // rejected refresh token up front, instead of letting the first command fail. Runs
+      // after `ready` so it never blocks startup; the banner updates when it resolves.
+      const auth = await checkAuthStatus();
+      setStatus(s => ({ ...s, authState: auth.state }));
     });
     return () => { endSession(); };
   }, []);
@@ -106,6 +126,8 @@ export function useAppState() {
     setPendingAuth,
     apiKeyPicker,
     setApiKeyPicker,
+    sessionPicker,
+    setSessionPicker,
     copilotActive,
     setCopilotActive,
     copilotProvider,

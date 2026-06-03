@@ -22,6 +22,15 @@ async function getSession(): Promise<StoredSession> {
   return cachedSession;
 }
 
+/**
+ * Drop the in-process session cache so the next request reloads it from disk. Call this
+ * after the stored session changes out-of-band — e.g. switching the active account, which
+ * rewrites accountKey and must take effect on the very next request's x-account-key header.
+ */
+export function resetSessionCache(): void {
+  cachedSession = null;
+}
+
 async function ensureFreshToken(session: StoredSession): Promise<StoredSession> {
   if (!expiresSoon(session)) return session;
 

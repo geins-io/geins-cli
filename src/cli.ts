@@ -10,7 +10,6 @@ import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
 import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
-import { managementRequest, isHttpMethod, methods as managementMethods } from './commands/management.ts';
 import { cliHelpSpec } from './help.ts';
 import {
   listWorkflows,
@@ -46,6 +45,11 @@ import {
   parseOrderListArgs,
   type OrderUpdate,
 } from './commands/orders.ts';
+import { listMarkets, listLanguages, listChannels, listLocales, marketName } from './commands/account.ts';
+import { applyMemoryAccount } from './memory/index.ts';
+import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
+import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
+import { outputJson } from './output/format.ts';
 
 const VERSION = '0.1.0';
 
@@ -193,6 +197,22 @@ const ORDER_HELP = [
   '  cat order.json | geins order create',
 ].join('\n');
 
+const ACCOUNT_HELP = [
+  'geins account — show account settings (v2 Account API)',
+  '',
+  'Subcommands:',
+  '  (none)                  Overview: markets + languages + locales',
+  '  markets [--json]        List market definitions (country-currency, e.g. SE-SEK, with VAT)',
+  '  languages [--json]      List the account\'s languages (code + name)',
+  '  locales [--json]        List locales (language-country tags, e.g. sv-SE) derived from channels',
+  '',
+  'Examples:',
+  '  geins account',
+  '  geins account markets --json',
+  '  geins account languages',
+  '  geins account locales',
+].join('\n');
+
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
 async function resolveBody(args: string[]): Promise<unknown> {
   const fileIdx = args.indexOf('--file');
@@ -220,12 +240,31 @@ async function resolveBody(args: string[]): Promise<unknown> {
 export async function run(argv: string[]): Promise<void> {
   const args = argv.slice(2);
 
+  // `--resume`/`--continue [id]` with no positional command launches the TUI and either
+  // opens the session picker or replays the given id. Detect it before the direct-mode gate
+  // so the flag isn't routed to runDirect as a command.
+  const resumeIdx = args.findIndex(a => a === '--resume' || a === '--continue');
+  if (resumeIdx !== -1) {
+    const maybeId = args[resumeIdx + 1];
+    const id = maybeId && !maybeId.startsWith('-') ? maybeId : undefined;
+    const consumedIdx = id ? resumeIdx + 1 : -1;
+    const positional = args.filter((a, i) => i !== resumeIdx && i !== consumedIdx && !a.startsWith('-'));
+    if (positional.length === 0) {
+      await launchTui({ open: true, id });
+      return;
+    }
+  }
+
   // Direct mode — no TUI
   if (args.length > 0) {
     await runDirect(args);
     return;
   }
 
+  await launchTui();
+}
+
+async function launchTui(resume?: { open: boolean; id?: string }): Promise<void> {
   // Interactive TUI mode requires a TTY
   if (!process.stdin.isTTY) {
     console.error('Interactive mode requires a terminal. Run geins --help for usage.');
@@ -238,7 +277,7 @@ export async function run(argv: string[]): Promise<void> {
   // Clear the screen (and scrollback) so the TUI starts on a clean canvas.
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
 
-  const app = render(React.createElement(App, { version: VERSION }), {
+  const app = render(React.createElement(App, { version: VERSION, resume }), {
     exitOnCtrlC: false,
   });
 
@@ -268,6 +307,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   if (accountOverride) setProfileOverride(accountOverride);
   if (outOverride) setOutputDir(outOverride);
 
+  // Scope memory to the same composite (session + apikey) bucket the TUI uses, so headless
+  // `resume`/`ask` read & write the same sessions and chat history. Without this, headless
+  // would fall back to the `_shared` bucket and never see the TUI's sessions.
+  await applyMemoryAccount();
+
   if (args[0] === '--help' || args[0] === 'help') {
     // Machine-readable command tree for LLMs/automation.
     if (args.includes('--json') || args.includes('--llm')) {
@@ -282,17 +326,20 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  login     Authenticate with Geins (v2 session)');
     console.log('  logout    Clear stored credentials');
     console.log('  whoami    Show current user and account');
+    console.log('  account   Show account settings — markets, languages, locales — uses the v2 Account API');
     console.log('  apikey    Manage live API accounts (set, list, use, remove, clear)');
     console.log('  workflow   Workflow commands (list, get, create, update, run, manifest, logs, enable, disable, vars)');
     console.log('  product    Product commands (get, list, items, variants, images, relations, parameters) — uses Management API');
     console.log('  order      Order commands (list, get, count, statuses, create, status, update, comment) — uses Management API');
-    console.log('  management Call the Management API (raw + named methods)');
     console.log('  api       Raw API request');
-    console.log('  output    Set/show the folder where responses + logs are dumped\n');
+    console.log('  output    Set/show the folder where responses + logs are dumped');
+    console.log('  ask       Ask the copilot a question (-c/--continue to keep the prior conversation)');
+    console.log('  resume    Print a past session transcript (no id → list sessions)\n');
     console.log('Global flags:');
     console.log('  --account <name>   Use a specific live-API account (or set GEINS_ACCOUNT)');
     console.log('  --out <dir>        Dump responses + request log to <dir> (or set GEINS_OUTPUT_DIR)');
     console.log('  --json      Force JSON output');
+    console.log('  --resume [id]  Open the TUI and resume a session (picker if no id)');
     console.log('  --help      Show help');
     console.log('  --version   Show version');
     console.log("\nRun 'geins product --help' for that command's options and examples.");
@@ -311,6 +358,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   if (commandArgs.includes('--help')) {
     if (commandName === 'product') console.log(PRODUCT_HELP);
     else if (commandName === 'order') console.log(ORDER_HELP);
+    else if (commandName === 'account') console.log(ACCOUNT_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -328,6 +376,57 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           console.log(`Account: ${label}`);
         }
         if (session.user.roles.length > 0) console.log(`Roles: ${session.user.roles.join(', ')}`);
+        break;
+      }
+      case 'resume': {
+        const jsonMode = commandArgs.includes('--json');
+        const id = commandArgs.find(a => !a.startsWith('-'));
+        if (!id) {
+          const sessions = await listSessions();
+          if (sessions.length === 0) {
+            if (jsonMode) outputJson({ sessions: [] });
+            else console.error('No sessions found.');
+            return;
+          }
+          if (jsonMode) {
+            outputJson({ sessions });
+            return;
+          }
+          console.log('Recent sessions (resume with: geins resume <id>):\n');
+          for (const s of sessions) {
+            const entries = await loadSessionEntries(s.id);
+            const when = new Date(s.startedAt).toLocaleString();
+            console.log(`  ${s.id}  ${when}  (${entries.length})  ${firstUserMessage(entries)}`);
+          }
+          return;
+        }
+        const entries = await loadSessionEntries(id);
+        if (entries.length === 0) {
+          console.error(`Session '${id}' not found or empty.`);
+          process.exit(1);
+        }
+        if (jsonMode) outputJson(transcriptJson(id, entries));
+        else formatTranscriptLines(entries, { color: true }).forEach(l => console.log(l));
+        break;
+      }
+      case 'ask': {
+        const jsonMode = commandArgs.includes('--json');
+        const cont = commandArgs.includes('-c') || commandArgs.includes('--continue');
+        const prompt = commandArgs.filter(a => !a.startsWith('-')).join(' ').trim();
+        if (!prompt) {
+          console.error('Usage: geins ask "<prompt>" [-c|--continue] [--json]');
+          process.exit(1);
+        }
+        if (!(await getCopilotConfig())) {
+          console.error('No copilot configured. Run geins (interactive) → /copilot to set one up.');
+          process.exit(1);
+        }
+        // Default = a fresh one-shot (clear rolling history first so scripted asks are
+        // deterministic); -c/--continue keeps prior turns so the conversation continues.
+        if (!cont) clearConversationHistory();
+        const response = await chat(prompt);
+        if (jsonMode) outputJson({ response });
+        else console.log(response);
         break;
       }
       case 'workflow': {
@@ -1541,48 +1640,6 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         console.log(JSON.stringify(data, null, 2));
         break;
       }
-      case 'management': {
-        const sub = commandArgs[0] ?? '';
-        const methodNames = Object.keys(managementMethods);
-
-        if (!sub || sub.toLowerCase() === 'help') {
-          console.log("Usage: geins management <METHOD> <path> [--body '<json>']   Raw Management API call");
-          for (const name of methodNames) {
-            const m = managementMethods[name]!;
-            console.log(`       geins management ${name}${m.usage ? ` ${m.usage}` : ''}    ${m.description}`);
-          }
-          break;
-        }
-
-        // Raw passthrough: geins management GET /API/Market/List
-        if (isHttpMethod(sub)) {
-          const method = sub.toUpperCase();
-          const path = commandArgs[1];
-          if (!path) {
-            console.error('Usage: geins management <METHOD> <path>');
-            process.exit(1);
-          }
-          let body: unknown;
-          const bodyIdx = commandArgs.indexOf('--body');
-          if (bodyIdx !== -1 && commandArgs[bodyIdx + 1]) {
-            body = JSON.parse(commandArgs[bodyIdx + 1]!);
-          }
-          const data = await managementRequest(method, path, body);
-          console.log(JSON.stringify(data, null, 2));
-          break;
-        }
-
-        // Named method
-        const named = managementMethods[sub.toLowerCase()];
-        if (!named) {
-          console.error(`Unknown method: management ${sub}`);
-          console.error('Run geins management help for available methods');
-          process.exit(1);
-        }
-        const data = await named.run(commandArgs.slice(1));
-        console.log(JSON.stringify(data, null, 2));
-        break;
-      }
       case 'output': {
         const sub = commandArgs[0];
         if (!sub || sub.toLowerCase() === 'status') {
@@ -1604,6 +1661,55 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         setOutputDir(sub);
         const resolved = await getOutputDir();
         console.log(`✓ Output folder set: ${resolved}`);
+        break;
+      }
+      case 'account': {
+        const sub = commandArgs[0]?.toLowerCase();
+        const jsonMode = commandArgs.includes('--json');
+        const vatPct = (rate?: number) => (rate != null ? `VAT ${+(rate * 100).toFixed(2)}%` : null);
+
+        if (sub === 'languages' || sub === 'language' || sub === 'langs') {
+          const languages = await listLanguages();
+          if (jsonMode) { outputJson(languages); break; }
+          for (const l of languages) console.log(`${l._id}  ${l.name}${l.active === false ? '  (inactive)' : ''}`);
+          console.log(`\n${languages.length} language${languages.length === 1 ? '' : 's'}`);
+          break;
+        }
+
+        if (sub === 'locales' || sub === 'locale') {
+          const locales = await listLocales();
+          if (jsonMode) { outputJson(locales); break; }
+          for (const l of locales) {
+            const extra = [l.languageName, l.channel && `channel: ${l.channel}`].filter(Boolean).join('  ');
+            console.log(`${l.tag}${extra ? `  ${extra}` : ''}`);
+          }
+          console.log(`\n${locales.length} locale${locales.length === 1 ? '' : 's'}`);
+          break;
+        }
+
+        if (sub === 'markets' || sub === 'market') {
+          const markets = await listMarkets();
+          if (jsonMode) { outputJson(markets); break; }
+          for (const m of markets) {
+            const bits = [m.currency?._id, vatPct(m.standardVatRate)].filter(Boolean).join(' · ');
+            console.log(`${marketName(m)}${bits ? `  (${bits})` : ''}${m.active === false ? '  (inactive)' : ''}`);
+          }
+          console.log(`\n${markets.length} market${markets.length === 1 ? '' : 's'}`);
+          break;
+        }
+
+        // Default: overview of markets, languages, and locales.
+        const [markets, languages, channels] = await Promise.all([listMarkets(), listLanguages(), listChannels()]);
+        const locales = await listLocales({ channels, languages });
+        if (jsonMode) { outputJson({ markets, languages, locales }); break; }
+        console.log(`Markets (${markets.length}):`);
+        for (const m of markets) {
+          const bits = [m.currency?._id, vatPct(m.standardVatRate)].filter(Boolean).join(' · ');
+          console.log(`  ${marketName(m)}${bits ? `  (${bits})` : ''}`);
+        }
+        console.log(`\nLanguages (${languages.length}):`);
+        for (const l of languages) console.log(`  ${l._id}  ${l.name}`);
+        console.log(`\nLocales (${locales.length}): ${locales.map((l) => l.tag).join(', ')}`);
         break;
       }
       default:
