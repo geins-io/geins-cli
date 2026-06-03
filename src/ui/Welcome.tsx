@@ -75,10 +75,17 @@ export function Welcome({ version, user, account }: WelcomeProps) {
         flexDirection="column"
         marginLeft={-1}
         marginRight={-1}
+        marginTop={1}
         paddingX={1}
+        paddingY={1}
+
       >
         <Text>Welcome to <Text bold color="cyan">Geins CLI</Text> — your terminal companion for the Geins Commerce Backend.</Text>
         <Text dimColor>Manage products, categories, orders, and workflows. Type <Text color="cyan">/help</Text> to get started.</Text>
+      </Box>
+      <Box marginTop={1} paddingX={1} gap={1}>
+        <Text color="yellow">ℹ</Text>
+        <Text color="yellow">Geins CLI update available! 0.1.0 → 0.2.0</Text>
       </Box>
       <Text> </Text>
     </Box>
