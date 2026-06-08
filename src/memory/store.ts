@@ -3,8 +3,19 @@ import { join } from 'node:path';
 import { mkdir, readFile, writeFile, appendFile, stat, rename, access } from 'node:fs/promises';
 import { loadSession, loadCredentialsStore } from '../config/store.ts';
 
-const BASE_DIR = join(homedir(), '.config', 'geins', 'memory');
-const SHARED_DIR = join(BASE_DIR, '_shared');
+/**
+ * Root of all memory state, resolved LAZILY (not captured at import time). `GEINS_CONFIG_DIR`
+ * overrides the `~/.config/geins` base — used to relocate or sandbox state, and the only reliable
+ * way to redirect it in tests: Bun's `os.homedir()` caches at process start and ignores a
+ * runtime-mutated `process.env.HOME`, so a test must set `GEINS_CONFIG_DIR` instead.
+ */
+function baseDir(): string {
+  const root = process.env.GEINS_CONFIG_DIR || join(homedir(), '.config', 'geins');
+  return join(root, 'memory');
+}
+function sharedDir(): string {
+  return join(baseDir(), '_shared');
+}
 
 let currentAccountKey: string | undefined;
 let migrationDone = false;
@@ -45,7 +56,7 @@ export async function applyMemoryAccount(): Promise<string | undefined> {
 }
 
 function getMemoryDir(): string {
-  return currentAccountKey ? join(BASE_DIR, currentAccountKey) : SHARED_DIR;
+  return currentAccountKey ? join(baseDir(), currentAccountKey) : sharedDir();
 }
 
 function buildPaths(dir: string) {
@@ -92,10 +103,10 @@ async function migrateLegacyFiles(): Promise<void> {
   if (await fileExists(targetKnowledge)) return;
 
   const legacyFiles = ['chat-history.jsonl', 'command-context.json', 'knowledge.json'];
-  const legacySessionsDir = join(BASE_DIR, 'sessions');
+  const legacySessionsDir = join(baseDir(), 'sessions');
 
   for (const file of legacyFiles) {
-    const src = join(BASE_DIR, file);
+    const src = join(baseDir(), file);
     const dest = join(targetDir, file);
     if (await fileExists(src)) {
       try { await rename(src, dest); } catch { /* cross-device or permission — skip */ }

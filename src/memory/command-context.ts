@@ -1,4 +1,4 @@
-import type { CommandContext, ManifestCache } from './types.ts';
+import type { CommandContext, ManifestCache, EntityRecord } from './types.ts';
 import { PATHS, readJsonSafe, writeJsonSafe } from './store.ts';
 import { trackEntity, loadKnowledge } from './knowledge.ts';
 
@@ -65,21 +65,51 @@ export async function trackApiResponse(command: string, response: string): Promi
   await writeJsonSafe(PATHS.commandContext, ctx);
 
   try {
-    const parsed = JSON.parse(response);
-    if (parsed?.items && Array.isArray(parsed.items)) {
-      for (const item of parsed.items.slice(0, 20)) {
-        if (item.id && item.name) {
-          const type = command.includes('workflow') ? 'workflow'
-            : command.includes('product') ? 'product'
-            : command.includes('variable') ? 'variable'
-            : null;
-          if (type) {
-            await trackEntity({ type, name: String(item.name), externalId: String(item.id), attributes: {} });
-          }
-        }
-      }
+    await trackEntitiesFromResponse(command, JSON.parse(response));
+  } catch { /* not JSON or no recognizable rows — skip */ }
+}
+
+/** Entity type for an item, inferred from the command that produced it. */
+function entityTypeForCommand(command: string): EntityRecord['type'] | null {
+  const c = command.toLowerCase();
+  if (c.includes('workflow')) return 'workflow';
+  if (c.includes('product')) return 'product';
+  if (c.includes('variable')) return 'variable';
+  // Orders, campaigns, brands and categories are all catalog/commerce records; the KB
+  // only models a few entity types, so map them to the closest one we render.
+  if (c.includes('order') || c.includes('campaign') || c.includes('brand') || c.includes('category') || c.includes('categories')) {
+    return 'endpoint';
+  }
+  return null;
+}
+
+/**
+ * Pull `{id, name}` rows out of whatever shape an API response took and record them as entities.
+ * The Live Management API is inconsistent — a bare array (`Brand/Query`), an `{items:[...]}`
+ * envelope, an `{Resource:{...}}`/`{Items:[...]}` envelope, and PascalCase `Id`/`Name` keys all
+ * occur — so we normalize across all of them instead of only matching lowercase `items[].id`.
+ */
+async function trackEntitiesFromResponse(command: string, parsed: unknown): Promise<void> {
+  const type = entityTypeForCommand(command);
+  if (!type) return;
+
+  const rows: unknown[] =
+    Array.isArray(parsed) ? parsed
+    : Array.isArray((parsed as any)?.items) ? (parsed as any).items
+    : Array.isArray((parsed as any)?.Items) ? (parsed as any).Items
+    : Array.isArray((parsed as any)?.Resource) ? (parsed as any).Resource
+    : (parsed as any)?.Resource && typeof (parsed as any).Resource === 'object' ? [(parsed as any).Resource]
+    : [];
+
+  for (const row of rows.slice(0, 20)) {
+    if (!row || typeof row !== 'object') continue;
+    const r = row as Record<string, unknown>;
+    const id = r.id ?? r.Id ?? r.ProductId ?? r.OrderId;
+    const name = r.name ?? r.Name ?? r.Title ?? r.ArticleNumber;
+    if (id != null && name != null) {
+      await trackEntity({ type, name: String(name), externalId: String(id), attributes: {} });
     }
-  } catch { /* not JSON or no items — skip */ }
+  }
 }
 
 export async function cacheManifest(manifest: unknown): Promise<void> {

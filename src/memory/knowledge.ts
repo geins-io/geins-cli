@@ -1,13 +1,14 @@
-import type { KnowledgeBase, KnowledgeBaseV1, EntityRecord, PatternRecord, KnowledgeFact } from './types.ts';
+import type { KnowledgeBase, KnowledgeBaseV1, EntityRecord, PatternRecord, KnowledgeFact, InteractionRecord } from './types.ts';
 import { PATHS, readJsonSafe, writeJsonSafe } from './store.ts';
 
 const MAX_ENTITIES = 100;
 const MAX_PATTERNS = 30;
 const MAX_EXAMPLES = 3;
+const MAX_INTERACTIONS = 25;
 const DECAY_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function emptyKb(): KnowledgeBase {
-  return { version: 2, entities: [], patterns: [], preferences: {}, updatedAt: Date.now() };
+  return { version: 2, entities: [], patterns: [], preferences: {}, interactions: [], updatedAt: Date.now() };
 }
 
 function migrateV1(v1: KnowledgeBaseV1): KnowledgeBase {
@@ -41,7 +42,11 @@ export async function loadKnowledge(): Promise<KnowledgeBase> {
     await writeJsonSafe(PATHS.knowledge, migrated);
     return migrated;
   }
-  return raw as KnowledgeBase;
+  const kb = raw as KnowledgeBase;
+  // `interactions` was added after the first v2 files were written — default it so older
+  // buckets keep loading instead of erroring on a missing array.
+  if (!Array.isArray(kb.interactions)) kb.interactions = [];
+  return kb;
 }
 
 async function saveKnowledge(kb: KnowledgeBase): Promise<void> {
@@ -129,6 +134,40 @@ export async function setPreference(key: string, value: string): Promise<void> {
   await saveKnowledge(kb);
 }
 
+/**
+ * Condense a copilot answer to a one-line gist for memory: drop think/code/command blocks,
+ * collapse whitespace, then keep the first sentence or ~200 chars. Deterministic (no extra
+ * model call) so recording a turn is cheap and offline-safe.
+ */
+export function summarizeAnswer(answer: string): string {
+  const stripped = answer
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[MEMORY\][\s\S]*?\[\/MEMORY\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!stripped) return '';
+  const firstSentence = stripped.match(/^.*?[.!?](?=\s|$)/)?.[0]?.trim();
+  const gist = firstSentence && firstSentence.length >= 20 ? firstSentence : stripped;
+  return gist.length > 200 ? gist.slice(0, 197).trimEnd() + '…' : gist;
+}
+
+/** Record a user prompt + a short summary of the copilot's answer (most-recent-first, capped). */
+export async function recordInteraction(prompt: string, answer: string): Promise<void> {
+  const summary = summarizeAnswer(answer);
+  const cleanPrompt = prompt.replace(/\s+/g, ' ').trim();
+  if (!cleanPrompt || !summary) return; // nothing useful to remember
+  const kb = await loadKnowledge();
+  kb.interactions.unshift({
+    id: crypto.randomUUID().slice(0, 8),
+    prompt: cleanPrompt.length > 200 ? cleanPrompt.slice(0, 197).trimEnd() + '…' : cleanPrompt,
+    summary,
+    createdAt: Date.now(),
+  });
+  if (kb.interactions.length > MAX_INTERACTIONS) kb.interactions = kb.interactions.slice(0, MAX_INTERACTIONS);
+  await saveKnowledge(kb);
+}
+
 export async function clearKnowledge(): Promise<void> {
   await writeJsonSafe(PATHS.knowledge, emptyKb());
 }
@@ -197,6 +236,17 @@ export function buildKnowledgePromptSection(kb: KnowledgeBase, options: BuildOpt
     parts.push('Preferences:');
     for (const [k, v] of prefs) {
       parts.push(`- ${k}: ${v}`);
+    }
+  }
+
+  const interactionLimit = ctx < 16000 ? 2 : ctx < 128000 ? 3 : 5;
+  const interactions = (kb.interactions ?? []).slice(0, interactionLimit);
+  if (interactions.length) {
+    parts.push('');
+    parts.push('Recent Q&A (most recent first):');
+    for (const i of interactions) {
+      parts.push(`- Q: ${i.prompt}`);
+      parts.push(`  A: ${i.summary}`);
     }
   }
 

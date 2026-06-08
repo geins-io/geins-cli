@@ -36,12 +36,16 @@ import {
   trackWorkflowList,
   searchSessions,
   loadKnowledge,
+  recordInteraction,
+  addFact,
+  setPreference,
   clearKnowledge,
   clearHistory,
   clearCommandContext,
   cacheManifest,
   applyMemoryAccount,
 } from '../memory/index.ts';
+import { exportMemory } from '../commands/memory.ts';
 import {
   listWorkflows,
   getWorkflow,
@@ -438,6 +442,10 @@ export function App({ version = VERSION }: { version?: string }) {
             .replace(/<think>[\s\S]*$/, '')
             .replace(/```(?:bash|sh|shell)?[\s\S]*?```/g, '')
             .replace(/```(?:bash|sh|shell)?[\s\S]*$/, '')
+            // [MEMORY]…[/MEMORY] tags are a side channel for the knowledge base, not prose —
+            // strip them (and a trailing unterminated one mid-stream) so the user never sees them.
+            .replace(/\[MEMORY\][\s\S]*?\[\/MEMORY\]/g, '')
+            .replace(/\[MEMORY\][\s\S]*$/, '')
             .trim();
 
         const renderActivity = () => {
@@ -503,6 +511,8 @@ export function App({ version = VERSION }: { version?: string }) {
           // create). Repeat until a response has no commands or we hit the cap.
           const MAX_ROUNDS = 6;
           let pending = cleaned;
+          // Track the latest prose answer so we can record the turn (prompt + summary) in memory.
+          let lastAnswer = cleaned;
           for (let round = 0; round < MAX_ROUNDS; round++) {
             if (controller.signal.aborted) throw new Error('cancelled');
             const commands = extractGeinsCommands(pending);
@@ -594,9 +604,12 @@ export function App({ version = VERSION }: { version?: string }) {
                   isWorking={false}
                 />,
               );
+              lastAnswer = followupCleaned;
             }
             pending = lastRound ? '' : followupCleaned;
           }
+          // Persist the turn (original question + a one-line answer summary) for /memory.
+          await recordInteraction(trimmed, lastAnswer);
         }
       } catch (err) {
         appState.setLiveComponent(null);
@@ -2302,18 +2315,39 @@ export function App({ version = VERSION }: { version?: string }) {
         case 'memory': {
           const sub = args[0]?.toLowerCase();
           if (sub === 'clear') {
-            // Start fresh for the active account: wipe the in-memory copilot buffer plus
-            // all persisted memory (chat history, command context, knowledge) for this bucket.
+            // Start fresh for the account the user is CURRENTLY on. Re-resolve the memory
+            // bucket first so a mid-session `/apikey use` switch can't leave us pointed at a
+            // stale account — clear must only ever wipe the active account's bucket.
+            await applyMemoryAccount();
             clearConversationHistory();
             await clearHistory();
             await clearCommandContext();
             await clearKnowledge();
             appState.setChatComponents([]);
-            logSuccess('  ✓ Memory cleared — starting fresh');
+            const who = appState.status.accountName || appState.status.account || 'shared';
+            logSuccess(`  ✓ Memory cleared for ${who} — starting fresh`);
+            break;
+          }
+          if (sub === 'add') {
+            const category = args[1]?.toLowerCase();
+            const text = args.slice(2).join(' ').trim();
+            const cats = ['project', 'workflow', 'api', 'preference', 'pattern'] as const;
+            if (!category || !(cats as readonly string[]).includes(category) || !text) {
+              logDim('  Usage: /memory add <project|workflow|api|preference|pattern> <fact>');
+              break;
+            }
+            if (category === 'preference') await setPreference(text, 'true');
+            else await addFact({ category: category as typeof cats[number], content: text, confidence: 0.8, source: 'cli' });
+            logSuccess(`  ✓ Remembered (${category})`);
+            break;
+          }
+          if (sub === 'export') {
+            const file = await exportMemory(args[1] === '--json' ? 'json' : 'md');
+            logSuccess(`  ✓ Exported memory to ${file}`);
             break;
           }
           const kb = await loadKnowledge();
-          if (kb.entities.length === 0 && kb.patterns.length === 0 && Object.keys(kb.preferences).length === 0) {
+          if (kb.entities.length === 0 && kb.patterns.length === 0 && Object.keys(kb.preferences).length === 0 && kb.interactions.length === 0) {
             logDim('  No learned knowledge yet');
             break;
           }
@@ -2336,7 +2370,14 @@ export function App({ version = VERSION }: { version?: string }) {
           if (Object.keys(kb.preferences).length > 0) {
             logText('  Preferences:');
             for (const [k, v] of Object.entries(kb.preferences)) {
-              logText(`    ${k}: ${v}`);
+              logText(v === 'true' ? `    ${k}` : `    ${k}: ${v}`);
+            }
+          }
+          if (kb.interactions.length > 0) {
+            logText(`  Recent Q&A (${kb.interactions.length}):`);
+            for (const i of kb.interactions.slice(0, 5)) {
+              logText(`    Q: ${i.prompt}`);
+              logDim(`    A: ${i.summary}`);
             }
           }
           break;

@@ -50,7 +50,16 @@ export interface KnowledgeBase {
   entities: EntityRecord[];
   patterns: PatternRecord[];
   preferences: Record<string, string>;
+  /** Recent copilot Q&A: the user prompt plus a short summary of the answer. */
+  interactions: InteractionRecord[];
   updatedAt: number;
+}
+
+export interface InteractionRecord {
+  id: string;
+  prompt: string;
+  summary: string;
+  createdAt: number;
 }
 
 export interface EntityRecord {

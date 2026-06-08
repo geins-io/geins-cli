@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { existsSync } from 'node:fs';
-import { loadCredentialsStore } from '../config/store';
+import { loadCredentialsStore, loadInputHistory, saveInputHistory } from '../config/store';
 import { listWorkflows } from '../commands/workflows';
 
 const COMMANDS: Record<string, string> = {
@@ -37,7 +37,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   output: ['status', 'off'],
   copilot: ['provider', 'set'],
-  memory: ['clear'],
+  memory: ['list', 'add', 'export', 'clear'],
 };
 
 const ARG_HINTS: Record<string, Record<string, string>> = {
@@ -113,9 +113,28 @@ const COMMAND_NAMES = Object.keys(COMMANDS);
 
 // Matches an absolute path as terminals insert it on drag-and-drop (with backslash-escaped
 // spaces, optional file:// scheme) that ends in a file extension. Used to show a compact chip
-// for any dropped file — images get an [image] chip, everything else a [file: name] chip.
+// for any dropped file — the path is replaced in the input by a "[{type} #n {name}]" chip.
 const DROPPED_PATH_RE = /(?:file:\/\/)?(?:~\/|\/)(?:\\ |[^\s])*\.[A-Za-z0-9]{1,12}/gi;
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|heic|svg)$/i;
+
+/** A short kind label for a dropped file, derived from its extension (e.g. "image", "pdf", "csv"). */
+function fileTypeLabel(name: string): string {
+  if (IMAGE_EXT_RE.test(name)) return 'image';
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const byExt: Record<string, string> = {
+    pdf: 'pdf', csv: 'csv', tsv: 'tsv', json: 'json', xml: 'xml', yaml: 'yaml', yml: 'yaml',
+    txt: 'text', md: 'text', log: 'text',
+    xlsx: 'spreadsheet', xls: 'spreadsheet',
+    doc: 'document', docx: 'document',
+    zip: 'archive', gz: 'archive', tar: 'archive', rar: 'archive',
+  };
+  return byExt[ext] || ext || 'file';
+}
+
+/** The filename with its extension stripped (e.g. "True Multimeter.pdf" → "True Multimeter"). */
+function baseFileName(name: string): string {
+  return name.replace(/\.[A-Za-z0-9]{1,12}$/, '') || name;
+}
 
 /** Strip surrounding quotes/escapes and resolve file:// and ~ to a real filesystem path. */
 function normalizeDroppedPath(match: string): string {
@@ -148,8 +167,23 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   // (instead of the prefix-filtered subset) so the user sees what they're cycling.
   const [cycleAll, setCycleAll] = useState(false);
   const [inputKey, setInputKey] = useState(0);
-  const historyRef = useRef<string[]>([]);
+  // Up/down-arrow input recall, bucketed by mode so copilot prompts and slash-commands never
+  // mix: switching modes (Shift+Tab) recalls only that mode's prior inputs. Both buckets persist
+  // across sessions (config dir/input-history.json).
+  const historyRef = useRef<{ copilot: string[]; command: string[] }>({ copilot: [], command: [] });
+  const currentHistory = () => (copilotActive ? historyRef.current.copilot : historyRef.current.command);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  // Reset the recall cursor when the mode changes — the two buckets differ in length, so a stale
+  // index could point out of bounds or at the wrong entry.
+  useEffect(() => { setHistoryIndex(-1); }, [copilotActive]);
+  // Seed both buckets from disk on mount so up-arrow recalls inputs from prior sessions. Merge
+  // (rather than replace) so anything typed before the async load lands still survives.
+  useEffect(() => {
+    loadInputHistory().then(h => {
+      historyRef.current.copilot = [...h.copilot, ...historyRef.current.copilot];
+      historyRef.current.command = [...h.command, ...historyRef.current.command];
+    }).catch(() => {});
+  }, []);
   // Dropped-file chips: placeholder text shown in the input → real path used on submit.
   const attachmentsRef = useRef<Map<string, string>>(new Map());
   const attachCounter = useRef(0);
@@ -259,6 +293,21 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
       if (key.escape && onCancel) onCancel();
       return;
     }
+    // Enter handling (we own it instead of TextInput.onSubmit so we can branch on modifiers):
+    // in copilot mode, Shift/Option+Enter inserts a row break instead of submitting — but only
+    // while composing a free prompt (not in a picker or the command menu, where Enter selects).
+    if (key.return) {
+      const wantNewline =
+        copilotActive && (key.shift || key.meta) &&
+        !showMenu && !inWorkflowPicker && !inApiKeyPicker;
+      if (wantNewline) {
+        setValue(v => v + '\n');
+        setInputKey(k => k + 1); // remount TextInput so its cursor follows the appended newline
+        return;
+      }
+      handleSubmit(value);
+      return;
+    }
     // Inline workflow picker takes the arrows first; each step rewrites the input to
     // `/workflow run <id>` so the field always reflects what enter will submit.
     if (inWorkflowPicker) {
@@ -297,17 +346,19 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
       setMenuIndex(i => (i >= matches.length - 1 ? 0 : i + 1));
       return;
     }
-    if (key.upArrow && !showMenu && historyRef.current.length > 0) {
-      const newIndex = historyIndex < historyRef.current.length - 1 ? historyIndex + 1 : historyIndex;
+    if (key.upArrow && !showMenu && currentHistory().length > 0) {
+      const hist = currentHistory();
+      const newIndex = historyIndex < hist.length - 1 ? historyIndex + 1 : historyIndex;
       setHistoryIndex(newIndex);
-      setValue(historyRef.current[historyRef.current.length - 1 - newIndex]!);
+      setValue(hist[hist.length - 1 - newIndex]!);
       setInputKey(k => k + 1);
       return;
     }
     if (key.downArrow && !showMenu && historyIndex >= 0) {
+      const hist = currentHistory();
       const newIndex = historyIndex - 1;
       setHistoryIndex(newIndex);
-      setValue(newIndex < 0 ? '' : historyRef.current[historyRef.current.length - 1 - newIndex]!);
+      setValue(newIndex < 0 ? '' : hist[hist.length - 1 - newIndex]!);
       setInputKey(k => k + 1);
       return;
     }
@@ -371,22 +422,25 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   });
 
   const handleChange = (raw: string) => {
-    // Single-line field: collapse newlines/tabs (e.g. from a multiline paste) to spaces
-    // so the layout and the prompt icon don't break.
-    let next = raw.replace(/[\r\n\t]+/g, ' ');
+    // Copilot mode is multi-line: keep row breaks (normalize CRLF→LF, tabs→space) so pasted
+    // and manually-inserted newlines survive. Command mode stays single-line — collapse all
+    // whitespace runs to a space so the layout and prompt icon don't break.
+    let next = copilotActive
+      ? raw.replace(/\r\n?/g, '\n').replace(/\t/g, ' ')
+      : raw.replace(/[\r\n\t]+/g, ' ');
     // A drag-drop/paste inserts many chars at once; only then collapse dropped file paths
     // into a chip (and guard the regex behind a cheap check so big pastes don't stall).
     const jumped = next.length - prevValueRef.current.length > 1;
-    if (jumped && /(?:~\/|\/)[^\s]*\.[A-Za-z0-9]/.test(next)) {
+    // Cheap pre-check must allow backslash-escaped spaces (e.g. "True\ Multimeter.pdf"), same as
+    // DROPPED_PATH_RE — a plain [^\s]* here would stop at the space and skip the chip collapse.
+    if (jumped && /(?:~\/|\/)(?:\\ |[^\s])*\.[A-Za-z0-9]/.test(next)) {
       next = next.replace(DROPPED_PATH_RE, (match) => {
         const realPath = normalizeDroppedPath(match);
         // Only collapse paths that point at a real local file — leaves pasted URLs and
         // incidental "/foo.bar" text untouched.
         if (!existsSync(realPath)) return match;
         const name = realPath.split('/').pop() || realPath;
-        const placeholder = IMAGE_EXT_RE.test(name)
-          ? `[image #${++attachCounter.current}]`
-          : `[file #${++attachCounter.current}: ${name}]`;
+        const placeholder = `[${fileTypeLabel(name)} #${++attachCounter.current} ${baseFileName(name)}]`;
         attachmentsRef.current.set(placeholder, realPath);
         return placeholder;
       });
@@ -441,7 +495,13 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
     attachmentsRef.current.clear();
     attachCounter.current = 0;
     if (submitted.trim()) {
-      historyRef.current.push(submitted.trim());
+      // Save into the bucket for the mode it was submitted in, skipping consecutive dupes.
+      const hist = currentHistory();
+      if (hist[hist.length - 1] !== submitted.trim()) {
+        hist.push(submitted.trim());
+        // Persist BOTH buckets so recall survives a restart in either mode (fire-and-forget).
+        void saveInputHistory(historyRef.current);
+      }
     }
     onSubmit(submitted);
     setValue('');
@@ -492,7 +552,7 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
         {disabled ? (
           <Text dimColor>processing...</Text>
         ) : (
-          <TextInput key={inputKey} value={value} onChange={handleChange} onSubmit={handleSubmit} />
+          <TextInput key={inputKey} value={value} onChange={handleChange} />
         )}
         {hints && !workflowRunIntent && <Text dimColor>  {hints}</Text>}
       </Box>
@@ -575,14 +635,17 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
           <Text dimColor>{separator}</Text>
         </>
       ) : null}
-      <Box paddingX={1}>
-        <Text color={copilotActive ? 'magenta' : 'cyan'}>
-          {copilotActive ? `⏵⏵ copilot mode on` : '⏵⏵ cli mode on'}
-        </Text>
-        {copilotActive && copilotProvider && (
-          <Text dimColor>{` · ${copilotProvider}`}</Text>
-        )}
-        <Text dimColor>{busy ? ' · ctrl-c to cancel' : ' (shift+tab to cycle)'}</Text>
+      <Box paddingX={1} justifyContent="space-between">
+        <Box>
+          <Text color={copilotActive ? 'magenta' : 'cyan'}>
+            {copilotActive ? `⏵⏵ copilot mode on` : '⏵⏵ cli mode on'}
+          </Text>
+          {copilotActive && copilotProvider && (
+            <Text dimColor>{` · ${copilotProvider}`}</Text>
+          )}
+          <Text dimColor>{busy ? ' · ctrl-c to cancel' : ' (shift+tab to cycle)'}</Text>
+        </Box>
+        {copilotActive && <Text dimColor>⇧⏎ newline</Text>}
       </Box>
     </Box>
   );

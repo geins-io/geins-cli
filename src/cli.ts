@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, createProduct, updateProduct, type ProductWrite, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, createProduct, updateProduct, deleteProduct, type ProductWrite, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, createProductItem, setProductStock, queryProductStock, listPriceLists, getProductPrices, setProductPrices, type PriceWrite, type ProductItemWrite, type ProductItemIdType, type ProductItemStockWrite, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { cliHelpSpec } from './help.ts';
 import {
@@ -77,295 +77,15 @@ import {
   type CheckoutBranding,
   type CustomerType,
 } from './commands/merchant.ts';
-import { applyMemoryAccount } from './memory/index.ts';
+import { applyMemoryAccount, recordInteraction } from './memory/index.ts';
+import { memoryAdd, memoryList, memoryClear, exportMemory } from './commands/memory.ts';
 import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
 import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
 import { outputJson } from './output/format.ts';
 import { setBaseTitle } from './output/title.ts';
+import { PRODUCT_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP } from './commands/help-text.ts';
 
 const VERSION = '0.1.0';
-
-const PRODUCT_HELP = [
-  'geins product — query the product catalog (Management API)',
-  '',
-  'Subcommands:',
-  '  get <id> [--idtype <0-3>] [--json]        Show one product (id is the internal id by default)',
-  '  create [flags | --file|--body|stdin]      Create a product (see "create" below)',
-  '  update <id> [--idtype <0-3>] [--file|--body|stdin]   Partial update (PUT; merges supplied fields)',
-  '  list [filters] [--json]                   Query products (alias: query); defaults to page 1',
-  '  items <id> [--idtype <0-3>] [--json]      List a product\'s items (SKUs of one product)',
-  '  variants <id> [--idtype <0-3>] [--json]   Show the product\'s variant group (sibling products + dimensions)',
-  '  variants create [flags | JSON]            Create a variant group from existing products',
-  '  variants set <id> <Label=Value>...        Set/overwrite dimensions of a product already in a group',
-  '  variants delete <groupId>                 Delete a whole variant group',
-  '  variants labels [list|add <n>|remove <n>|rename <old> <new>]   Manage variant dimension labels',
-  '  images <id> [--json]                      List a product\'s images',
-  '  images add <id> <file|url> [--name <n>] [--primary] [--position <n>] [--add]   Upload an image (jpg/png/gif); keeps & prints the stored name. --add uses POST (add) instead of PUT (upsert)',
-  '  images add-existing <id> <imageName>      Link an already-uploaded image to the product (no upload); imageName is the original file name (the basename of the source)',
-  '  images delete <id> <imageName>            Remove an image',
-  '  images set-primary <id> <imageName>       Make an image the primary one',
-  '  images reorder <id> <imageName> <pos>     Change an image\'s position',
-  '  brands [list|get <id>|create --name <n> [--external-id <id>] [--desc <code>:<text>]|update <id> ...|delete <id>]   Manage brands',
-  '  categories [list|get <id>|create --name <code>:<text> [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]|update <id> ...]   Manage categories',
-  '  text <id> [--idtype <0-3>] [--json]       List a product\'s localized texts (Names/ShortTexts/LongTexts/TechTexts)',
-  '  text set <id> <name|shorttext|longtext|techtext> <locale>:<text>...  [--idtype <0-3>]   Set/merge localized text (one locale, keeps the rest)',
-  '  categories assign <productId> <categoryId> [--idtype <0-3>]     Assign a category to a product',
-  '  categories set-main <productId> <categoryId> [--idtype <0-3>]   Make a category the product\'s main (writes CategoryIds with it first)',
-  '  categories unassign <productId> <categoryId> [--idtype <0-3>]   Remove a category from a product (preserves main)',
-  '  relation-types [list|get <id>|add <name> [--order <n>]|update <id> [--name <n>] [--order <n>]|delete <id>]   Manage relation types',
-  '  relations <id> [--json]                   List a product\'s related products',
-  '  relations link <id> <relationTypeId> <relatedId...>     Link related products',
-  '  relations unlink <id> <relationTypeId> <relatedId...>   Unlink related products',
-  '  parameters <id> [--idtype <0-3>] [--json]   List a product\'s parameter values',
-  '  parameters get <id> <paramId>             Show one resolved parameter value',
-  '  parameters set <id> <paramId> <value> [--desc <code>:<text>]   Assign/update a value',
-  '  parameters remove <id> <paramId>          Remove a parameter assignment',
-  '  parameters batch <update|replace|remove> [--file|--body|stdin]   Batch value writes (JSON)',
-  '  parameters defs [get <id>|create --name <n> --group <id> --type <1-7>|update <id> ...]   Parameter definitions',
-  '  parameters groups [get <id>|create --name <n> [--order <n>] [--param <id>...]|update <id> ...]   Parameter groups',
-  '  parameters predefined [get <id>|add --param <pid> --name <n>|rename <id> <name>]   Predefined values',
-  '',
-  'parameters — a "parameter" (e.g. Material) is a definition that belongs to a group and',
-  '  has a type (1-7); a product gets a parameter VALUE by assigning a string to a parameterId.',
-  '  batch update = merge (keeps unlisted); batch replace = removes values not in the body.',
-  '  batch update/replace body: { "values": [ { "ProductId", "ParameterId", "Value", "LocalizedDescriptions"? } ] }',
-  '  batch remove body:         { "assignments": [ { "ProductId", "ParameterId" } ] }',
-  '',
-  'create — create a product (convenience flags, or a full JSON body):',
-  '  --article <s>                 Article number',
-  '  --name <code>:<text>          Localized name (repeatable, e.g. en:"My Product")',
-  '  --active / --inactive         Set Active (default: API default)',
-  '  --brand <id>                  BrandId',
-  '  --supplier <id>               SupplierId',
-  '  --price <n> --currency <c>    Purchase price + currency',
-  '  --category <id>               CategoryId (repeatable)',
-  '  --vat <n>                     Vat',
-  '  --external-id <s>             ExternalId',
-  '  --file <path> | --body <json> | stdin   Full Product.Models.Write.Product body',
-  '  --json                        Output the created product as JSON',
-  '',
-  'update <id> — partial update; supply only the fields to change as JSON:',
-  '  --file <path> | --body <json> | stdin   e.g. { "Active": false, "BrandId": 7 }',
-  '',
-  'variants create — group existing products as variants of each other:',
-  '  --name <name>                 Optional group name',
-  '  --label <name>                Declared dimension (repeatable); omit to derive from products',
-  '  --product <id>:L=V,L=V        A product + its dimension values (repeatable)',
-  '  --collapse                    Set CollapseInLists',
-  '  --idtype <0-3>                Id type for all product ids (default 0=internal)',
-  '  --file <path> | --body <json> | stdin   JSON body form',
-  '  --json                        Output the structured result',
-  '  Labels must be registered first (variants labels add <name>); the main product',
-  '  cannot be set via the API. JSON shape:',
-  '  { "name"?, "collapse"?, "idType"?, "labels"?: [..], "products": [ { "id", "dimensions": { "Color":"Red" } } ] }',
-  '',
-  'list / query filters (repeatable flags accumulate):',
-  '  --brand <id>                 Brand id',
-  '  --category <id>              Category id',
-  '  --supplier <id>              Supplier id',
-  '  --id <productId>             Product id',
-  '  --article <articleNumber>    Article number',
-  '  --updated-after <ISO8601>    Updated after a date (e.g. 2026-01-01T00:00:00Z)',
-  '  --created-after <ISO8601>    Created after a date',
-  '  --sellable                   Only sellable products',
-  '  --in-stock                   Only in-stock products',
-  '  --page <n>                   Page number (page size 1000)',
-  '  --batch <id>                 BatchId from a prior page (required for page > 1)',
-  '  --include <fields>           Child collections, comma-separated (default Names). "" = basic data only,',
-  '                               null/omit = no product data. Valid: Names, ShortTexts, LongTexts, TechTexts,',
-  '                               Items, Prices, Categories, Parameters, Variants, Markets, Images, Feeds, Urls,',
-  '                               ShippingFees, RelatedProducts, DiscountCampaigns, LowestPrice',
-  '  --json                       Raw JSON output',
-  '',
-  'Examples:',
-  '  geins product get 10001 --json',
-  '  geins product create --article TEST-001 --name en:"Test Product" --active',
-  '  geins product update 10001 --body \'{"Active":false}\'',
-  '  geins product items 10001',
-  '  geins product variants 10001',
-  '  geins product images 10001',
-  '  geins product images add 10001 ./hero.jpg --primary',
-  '  geins product images add 10001 https://example.com/img.png --name img.png',
-  '  geins product images add-existing 10001 hero.jpg',
-  '  geins product brands',
-  '  geins product brands create --name Nike --external-id nike',
-  '  geins product categories',
-  '  geins product text 2807',
-  '  geins product text set 2807 longtext sv:"Kopplingsplintar av transparent nylon."',
-  '  geins product text set 2807 longtext en:"Connection terminals."   # adds en, keeps sv',
-  '  geins product categories create --name en:Shoes --parent 1',
-  '  geins product categories assign 10001 42',
-  '  geins product relation-types add Accessories',
-  '  geins product relations link 10001 1 10002 10003',
-  '  geins product parameters 10001',
-  '  geins product parameters set 10001 42 "100% Cotton"',
-  '  geins product parameters defs create --name Material --group 3 --type 1',
-  '  geins product variants labels add Color',
-  '  geins product variants create --name Tee --label Color --product 1005:Color=Red --product 1010:Color=Blue',
-  '  geins product list --brand 1 --in-stock',
-  '  geins product list --page 2 --batch <BatchId> --json',
-  '  geins product list --account prod-elproman   # pick a live-API account (headless)',
-].join('\n');
-
-const ORDER_HELP = [
-  'geins order — inspect and handle orders (Management API)',
-  '',
-  'Subcommands:',
-  '  list [filters] [--json]                   Query orders (alias: query); defaults to page 1',
-  '  get <idOrPublicId> [--include <fields>] [--json]   One order (UUID → fetched by public id)',
-  '  count <email>                             Number of orders for a customer email',
-  '  statuses                                  List the available order status codes',
-  '  create [--file <path> | --body \'<json>\' | stdin]   Create (place) an order; returns the new id',
-  '  validate [--file | --body | stdin]        Validate an order body before creating it',
-  '  status <id> <status> [<txId> [<secondaryTxId>]]    Change order status',
-  '  update <id> [--external-id <s>] [--parcel <s>] [--external-status <0|10|20|30|40>] [--return-parcel <s>] | [--body \'<json>\']   Partial update',
-  '  cancel-row <orderId> <orderRowId>         Cancel a single order row',
-  '  comment <id> <text> [--system]            Add a comment to an order',
-  '  transaction <id> <transactionId>          Set the payment transaction id',
-  '  set-paid <paymentDetailId>                Mark a payment detail as paid',
-  '  delete <id>                               Delete an order',
-  '',
-  'list / query filters:',
-  '  --status <csv>               Status codes, comma-separated (StatusList)',
-  '  --email <email>              Customer email',
-  '  --customer <id>              Customer id',
-  '  --market <id>                Market id',
-  '  --payment <name>             Payment method name',
-  '  --external-status <0-40>     External order status (0|10|20|30|40)',
-  '  --created-after / --created-before <ISO8601>',
-  '  --updated-after / --updated-before <ISO8601>',
-  '  --completed-after / --completed-before <ISO8601>',
-  '  --include <fields>           Child collections, e.g. Rows,ShippingAddress',
-  '  --page <n>                   Page number',
-  '  --batch <id>                 BatchId from a prior page (required for page > 1)',
-  '  --json                       Raw JSON output',
-  '',
-  'Examples:',
-  '  geins order statuses',
-  '  geins order list --status 2 --json',
-  '  geins order get 100123 --include Rows,ShippingAddress',
-  '  geins order get 7b2e... --json            # public id (UUID)',
-  '  geins order count customer@example.com',
-  '  geins order comment 100123 "Called customer" ',
-  '  geins order status 100123 5',
-  '  geins order update 100123 --external-id EXT-9 --parcel ABC123',
-  '  cat order.json | geins order create',
-].join('\n');
-
-const CAMPAIGN_HELP = [
-  'geins campaign — manage campaigns (Management API)',
-  '',
-  'Subcommands:',
-  '  list [--json]                             List campaigns',
-  '  types [--json]                            List discount type ids (e.g. 3=Percentage, 4=Fixed amount)',
-  '  get <id> [--json]                         One campaign in full',
-  '  create [flags | --file|--body|stdin]      Create a campaign (see "create" below)',
-  '',
-  'create — promocode campaign flags:',
-  '  --promocode <CODE>           The discount code (required for flag mode)',
-  '  --market <id>                Market id (required; see `geins account markets`)',
-  '  --percentage <n>             Percentage discount (CampaignTypeId 3)',
-  '  --amount <CUR>:<n>           Fixed-amount discount per currency (CampaignTypeId 4); repeatable',
-  '  --title <text>               Localized title (pair with --lang)',
-  '  --lang <code>                Language code for --title (default: en)',
-  '  --from <ISO8601>             Valid from (default: now)',
-  '  --to <ISO8601>               Valid to',
-  '  --usage-limit <n>            Max total redemptions',
-  '  --once-per-customer          Limit to one redemption per customer',
-  '  --priority <n>               Campaign priority',
-  '  --enabled / --disabled       Enabled state (default: enabled)',
-  '  --file <path> | --body \'<json>\' | stdin   Full CampaignDetailItemBase body (escape hatch)',
-  '  --json                       Raw JSON output',
-  '',
-  'Examples:',
-  '  geins campaign types',
-  '  geins campaign list --json',
-  '  geins campaign create --promocode SUMMER10 --percentage 10 --market 1 --title "Summer" --lang sv',
-  '  geins campaign create --promocode FIX50 --amount SEK:50 --market 1',
-  '  cat campaign.json | geins campaign create',
-].join('\n');
-
-const ACCOUNT_HELP = [
-  'geins account — show account settings (v2 Account API)',
-  '',
-  'Subcommands:',
-  '  list [--json]           List the accounts you can access (● = current)',
-  '  (none)                  Overview: markets + languages + locales',
-  '  markets [--json]        List market definitions (country-currency, e.g. SE-SEK, with VAT)',
-  '  languages [--json]      List the account\'s languages (code + name)',
-  '  locales [--json]        List locales (language-country tags, e.g. sv-SE) derived from channels',
-  '',
-  'Target another account for a single command with --account-name <name> (resolves the',
-  'friendly name to the x-account-key). For live-API commands (product/order), pick the apikey',
-  'profile with --account <name>. The two are independent (different APIs).',
-  '',
-  'Examples:',
-  '  geins account list',
-  '  geins workflow list --account-name labs        # run against the "labs" v2 account',
-  '  geins account markets --account-name demogeins --json',
-  '  geins product get 10001 --account prod-labs    # live API, by apikey profile',
-].join('\n');
-
-const MERCHANT_HELP = [
-  'geins merchant — storefront data via the Merchant API (GraphQL)',
-  '',
-  'Shows what a customer sees: products for sale in a sales channel, carts, and checkout.',
-  'Requires an api-key profile (geins apikey set ...) and a merchant context',
-  '(geins merchant config set ...). Channel/market/locale resolve per field as:',
-  'flag → GEINS_* env (GEINS_CHANNEL/GEINS_TLD/GEINS_MARKET/GEINS_LOCALE/GEINS_MERCHANT_ACCOUNT)',
-  '→ value stored on the active profile.',
-  '',
-  'Products:',
-  '  product search [text] [--category <alias>] [--brand <alias>] [--take N] [--skip N] [--json]',
-  '  product <productId|term> [--json]      Full detail for one product',
-  '',
-  'Catalog:',
-  '  categories [--json]                    List categories (id · name · alias)',
-  '  brands [--json]                        List brands (id · name · alias)',
-  '',
-  'Cart:',
-  '  cart create                            Create a cart, prints its id',
-  '  cart get <id>                          Show a cart and its total',
-  '  cart add <id> --sku <skuId> [--qty N]  Add an item',
-  '  cart update <id> --item <itemId> --qty N   Change an item quantity',
-  '  cart remove <id> --item <itemId>       Remove an item',
-  '  cart promo <id> <code>                 Apply a promotion code',
-  '',
-  'Checkout:',
-  '  token <cartId> [options]               Generate a checkout token from a cart',
-  '    --url                                Print the full https://checkout.geins.services/<token> link',
-  '    --payment <id> / --shipping <id>     Preselect a payment/shipping method',
-  '    --available-payments <csv>           Restrict selectable payment method ids (e.g. 18,23)',
-  '    --available-shipping <csv>           Restrict selectable shipping method ids',
-  '    --customer-type person|organization  Customer type (default person)',
-  '    --editable / --no-copy               Allow cart editing / do not copy the cart',
-  '    --success/--cancel/--continue/--terms/--privacy <url>   Redirect URLs',
-  '    --branding <json|@file>              Branding { title, icon, logo, styles:{...} }',
-  '    --user <json|@file>                  Logged-in user object',
-  '  token parse <token>                    Decode a token payload (debug, offline)',
-  '',
-  'Config (per api-key profile):',
-  '  config                                 Show the resolved context + checkout defaults',
-  '  config set [--channel <c>] [--tld <t>] [--market <m>] [--locale <l>]',
-  '             [--store-account <slug>] [--environment prod|qa|dev]',
-  '             [--success/--cancel/--continue/--terms/--privacy <url>]',
-  '             [--default-payment <id>] [--default-shipping <id>]',
-  '             [--customer-type person|organization] [--branding <json|@file>]',
-  '             Persist context + default checkout settings baked into every token.',
-  '',
-  'The success URL automatically gets Geins params appended',
-  '(?geins-cart={geins.cartid}&geins-pm=…&geins-pt=…&geins-uid=…) so your',
-  'confirmation page receives the order. Redirect URLs/branding are stable per',
-  'storefront — set them once with `config set`; per-token flags override.',
-  '',
-  'Examples:',
-  '  geins merchant config set --channel 1 --tld se --market se --locale sv-SE --store-account labs',
-  '  geins merchant config set --success https://shop.com/thanks --terms https://shop.com/terms',
-  '  geins merchant product search shoe --take 5 --json',
-  '  CART=$(geins merchant cart create)',
-  '  geins merchant cart add $CART --sku 123 --qty 2',
-  '  geins merchant token $CART --url',
-].join('\n');
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
 async function resolveBody(args: string[]): Promise<unknown> {
@@ -544,6 +264,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     else if (commandName === 'campaign') console.log(CAMPAIGN_HELP);
     else if (commandName === 'account') console.log(ACCOUNT_HELP);
     else if (commandName === 'merchant') console.log(MERCHANT_HELP);
+    else if (commandName === 'memory') console.log(MEMORY_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -612,8 +333,42 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         // deterministic); -c/--continue keeps prior turns so the conversation continues.
         if (!cont) clearConversationHistory();
         const response = await chat(prompt);
+        await recordInteraction(prompt, response);
         if (jsonMode) outputJson({ response });
         else console.log(response);
+        break;
+      }
+      case 'memory': {
+        const sub = commandArgs[0]?.toLowerCase() ?? 'list';
+        const subArgs = commandArgs.slice(1);
+        const jsonMode = commandArgs.includes('--json');
+        switch (sub) {
+          case 'add': {
+            const positional = subArgs.filter(a => !a.startsWith('-'));
+            const [category, ...rest] = positional;
+            if (!category) {
+              console.error('Usage: geins memory add <project|workflow|api|preference|pattern> "<fact>"');
+              process.exit(1);
+            }
+            await memoryAdd(category, rest.join(' '));
+            break;
+          }
+          case 'list':
+          case 'show':
+            await memoryList(jsonMode);
+            break;
+          case 'export': {
+            const file = await exportMemory(jsonMode ? 'json' : 'md');
+            console.log(`✓ Exported memory to ${file}`);
+            break;
+          }
+          case 'clear':
+            await memoryClear();
+            break;
+          default:
+            console.error(`Unknown subcommand: memory ${sub}. Use: add | list | export | clear`);
+            process.exit(1);
+        }
         break;
       }
       case 'workflow': {
@@ -934,6 +689,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
             const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
             const collect = (flag: string) => subArgs.flatMap((a, i) => (subArgs[i - 1] === flag ? [a] : []));
+            // VatId must be a whole positive id; anything else (undefined, 0, a rate like 0.25) is dropped.
+            const vatIdFlag = (v: number | undefined) => (v !== undefined && Number.isInteger(v) && v > 0 ? v : undefined);
             const parseLoc = (flag: string): LocalizableContent[] | undefined => {
               const parts = collect(flag);
               if (parts.length === 0) return undefined;
@@ -958,11 +715,16 @@ async function runDirect(rawArgs: string[]): Promise<void> {
                 PurchasePriceCurrency: flagVal('--currency'),
                 CategoryIds: collect('--category').map(Number).filter((n) => !Number.isNaN(n)),
                 ExternalId: flagVal('--external-id'),
-                Vat: numFlag('--vat'),
+                // VAT is written by id (1 = 25%), not by rate; the read model's numeric `Vat`
+                // rate is NOT writable (a decimal there makes the API fail to parse the body).
+                // Accept --vat-id (preferred) or legacy --vat, and only send a whole positive id
+                // so a stray rate like 0.25 is ignored rather than triggering a cryptic 400.
+                VatId: vatIdFlag(numFlag('--vat-id') ?? numFlag('--vat')),
               };
               if (!input.CategoryIds?.length) delete input.CategoryIds;
+              if (input.VatId === undefined) delete input.VatId;
             } else {
-              console.error("Usage: geins product create --article <s> --name <code>:<text> [--active] [--brand <id>] [--supplier <id>] [--price <n>] [--currency <c>] [--category <id>]... [--vat <n>] [--external-id <s>]\n       geins product create [--file <path> | --body '<json>' | stdin]");
+              console.error("Usage: geins product create --article <s> --name <code>:<text> [--active] [--brand <id>] [--supplier <id>] [--price <n>] [--currency <c>] [--category <id>]... [--vat-id <id>] [--external-id <s>]\n       geins product create [--file <path> | --body '<json>' | stdin]");
               process.exit(1);
             }
 
@@ -991,10 +753,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             console.log(`✓ Updated product ${productName(product)}  (${product.ProductId})`);
             break;
           }
-          case 'items': {
+          case 'delete':
+          case 'remove': {
             const id = subArgs[0];
             if (!id) {
-              console.error('Usage: geins product items <productId> [--idtype <0-3>] [--json]');
+              console.error('Usage: geins product delete <id> [--idtype <0-3>]   (--idtype 1 = delete by article number)');
               process.exit(1);
             }
             let idType: ProductIdType | undefined;
@@ -1003,6 +766,57 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               const n = Number(subArgs[itIdx + 1]);
               if (n >= 0 && n <= 3) idType = n as ProductIdType;
             }
+            await deleteProduct(id, { idType });
+            if (jsonMode) { console.log(JSON.stringify({ deleted: id }, null, 2)); break; }
+            console.log(`✓ Deleted product ${id}`);
+            break;
+          }
+          case 'items': {
+            const flagVal = (flag: string) => { const i = subArgs.indexOf(flag); return i !== -1 ? subArgs[i + 1] : undefined; };
+            const numFlag = (flag: string) => { const v = flagVal(flag); const n = v != null ? Number(v) : NaN; return Number.isNaN(n) ? undefined : n; };
+            const readIdType = (args: string[]): ProductIdType | undefined => {
+              const i = args.indexOf('--idtype');
+              if (i !== -1 && args[i + 1] != null) { const n = Number(args[i + 1]); if (n >= 0 && n <= 3) return n as ProductIdType; }
+              return undefined;
+            };
+
+            // items create <productId> [--article s] [--name s] [--gtin s] [--inactive] [--weight g] [--external-id s] [--body json|stdin]
+            if (subArgs[0]?.toLowerCase() === 'create') {
+              const rest = subArgs.slice(1);
+              const productId = rest.find((a, i) => !a.startsWith('--') && rest[i - 1] !== '--article' && rest[i - 1] !== '--name' && rest[i - 1] !== '--gtin' && rest[i - 1] !== '--weight' && rest[i - 1] !== '--external-id' && rest[i - 1] !== '--idtype' && rest[i - 1] !== '--body' && rest[i - 1] !== '--file');
+              if (!productId) {
+                console.error("Usage: geins product items create <productId> [--article <s>] [--name <s>] [--gtin <ean>] [--weight <g>] [--external-id <s>] [--inactive] [--idtype <0-3>]\n       geins product items create <productId> [--file <path> | --body '<json>' | stdin]");
+                process.exit(1);
+              }
+              const hasBody = rest.includes('--file') || rest.includes('--body') || !process.stdin.isTTY;
+              let body: ProductItemWrite;
+              if (rest.includes('--article') || rest.includes('--name') || rest.includes('--gtin') || rest.includes('--weight') || rest.includes('--external-id') || rest.includes('--inactive') || rest.includes('--active')) {
+                body = {
+                  ArticleNumber: flagVal('--article'),
+                  Name: flagVal('--name'),
+                  Gtin: flagVal('--gtin'),
+                  Weight: numFlag('--weight'),
+                  ExternalId: flagVal('--external-id'),
+                  Active: rest.includes('--inactive') ? false : rest.includes('--active') ? true : undefined,
+                };
+              } else if (hasBody) {
+                body = (await resolveBody(rest)) as ProductItemWrite;
+              } else {
+                body = {};
+              }
+              const item = await createProductItem(productId, body, { idType: readIdType(rest) });
+              if (jsonMode) { console.log(JSON.stringify(item, null, 2)); break; }
+              console.log(`✓ Created item ${productItemName(item)}  (${item.ItemId}) on product ${productId}`);
+              console.log('  Set its stock with: geins product stock set ' + item.ItemId + ' <count>');
+              break;
+            }
+
+            const id = subArgs[0];
+            if (!id) {
+              console.error('Usage: geins product items <productId> [--idtype <0-3>] [--json]\n       geins product items create <productId> [flags]');
+              process.exit(1);
+            }
+            const idType = readIdType(subArgs);
             const items = await getProductItems(id, { idType });
             if (jsonMode) {
               console.log(JSON.stringify(items, null, 2));
@@ -1016,6 +830,105 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               console.log(`${status} ${productItemName(it)}  (${it.ItemId})${article}${stockStr}`);
             }
             console.log(`\n${items.length} item${items.length === 1 ? '' : 's'}`);
+            break;
+          }
+          case 'stock': {
+            // stock get <itemId...>            — read stock (internal item ids)
+            // stock set <itemId> <count> [--type 0|1|2] [--idtype 0-4]   — set stock on an item
+            const action = subArgs[0]?.toLowerCase();
+            if (action === 'set') {
+              const itemId = subArgs[1];
+              const count = Number(subArgs[2]);
+              if (!itemId || Number.isNaN(count)) {
+                console.error('Usage: geins product stock set <itemId> <count> [--type <0-2>] [--idtype <0-4>]\n  --type: 0 Available (default), 1 Oversellable, 2 Static   --idtype: 0 internal id (default), 1 article, 4 external');
+                process.exit(1);
+              }
+              const ti = subArgs.indexOf('--type');
+              const stockType = ti !== -1 && subArgs[ti + 1] != null ? Number(subArgs[ti + 1]) : 0;
+              const ii = subArgs.indexOf('--idtype');
+              const idType = ii !== -1 && subArgs[ii + 1] != null ? Number(subArgs[ii + 1]) : 0;
+              const write: ProductItemStockWrite = { Id: String(itemId), Stock: count, StockType: (stockType as 0 | 1 | 2) };
+              const result = await setProductStock([write], { idType: idType as ProductItemIdType });
+              if (jsonMode) { console.log(JSON.stringify(result, null, 2)); break; }
+              const typeName = stockType === 1 ? 'oversellable' : stockType === 2 ? 'static' : 'available';
+              console.log(`✓ Set ${typeName} stock = ${count} on item ${itemId}`);
+              break;
+            }
+            if (action === 'get') {
+              const ids = subArgs.slice(1).map(Number).filter((n) => !Number.isNaN(n));
+              if (ids.length === 0) { console.error('Usage: geins product stock get <itemId> [<itemId>...]   (internal item ids)'); process.exit(1); }
+              const stocks = await queryProductStock(ids);
+              if (jsonMode) { console.log(JSON.stringify(stocks, null, 2)); break; }
+              if (stocks.length === 0) { console.log('No stock records.'); break; }
+              for (const s of stocks) {
+                console.log(`item ${s.ItemId}  total ${s.Stock ?? 0}  sellable ${s.StockSellable ?? 0}  oversellable ${s.StockOversellable ?? 0}  static ${s.StockStatic ?? 0}`);
+              }
+              break;
+            }
+            console.error('Usage: geins product stock <get|set> ...   (run "geins product help")');
+            process.exit(1);
+            break;
+          }
+          case 'price':
+          case 'prices': {
+            // price lists                          — show the account's price lists (ids, market, currency)
+            // price get <productId> [--idtype N]   — read a product's resolved prices
+            // price set <productId> <price> --pricelist <id> [--currency X] [--staggered N]  — set a price
+            const action = subArgs[0]?.toLowerCase();
+            if (action === 'lists' || action === 'list') {
+              const lists = await listPriceLists();
+              if (jsonMode) { console.log(JSON.stringify(lists, null, 2)); break; }
+              if (lists.length === 0) { console.log('No price lists.'); break; }
+              for (const l of lists) {
+                const market = l.MarketId != null ? `  market ${l.MarketId}${l.MarketPrefix ? ` (${l.MarketPrefix})` : ''}` : '';
+                const flags = [l.Forced ? 'forced' : '', l.Active === false ? 'inactive' : ''].filter(Boolean).join(', ');
+                console.log(`${l.Id}  ${l.Name ?? l.Identifier ?? ''}  ${l.Currency ?? ''}${market}${flags ? `  [${flags}]` : ''}`);
+              }
+              break;
+            }
+            if (action === 'get') {
+              const productId = subArgs[1];
+              if (!productId) { console.error('Usage: geins product price get <productId> [--idtype <0-4>]'); process.exit(1); }
+              const ii = subArgs.indexOf('--idtype');
+              const idType = ii !== -1 && subArgs[ii + 1] != null ? Number(subArgs[ii + 1]) : 0;
+              const prices = await getProductPrices(productId, { idType: idType as ProductIdType });
+              if (jsonMode) { console.log(JSON.stringify(prices, null, 2)); break; }
+              if (prices.length === 0) { console.log('No prices for this product.'); break; }
+              for (const p of prices) {
+                const list = p.PriceListName ?? (p.PriceListId != null ? `list ${p.PriceListId}` : '');
+                const staggered = p.StaggeredCount ? `  qty≥${p.StaggeredCount}` : '';
+                console.log(`${list}  ${p.PriceIncVat ?? '?'} inc / ${p.PriceExVat ?? '?'} ex  ${p.Currency ?? ''}  (VAT ${p.VatRate ?? '?'})${staggered}`);
+              }
+              break;
+            }
+            if (action === 'set') {
+              const productId = subArgs[1];
+              const price = Number(subArgs[2]);
+              const li = subArgs.indexOf('--pricelist');
+              const priceListId = li !== -1 && subArgs[li + 1] != null ? Number(subArgs[li + 1]) : NaN;
+              if (!productId || Number.isNaN(price) || Number.isNaN(priceListId)) {
+                console.error('Usage: geins product price set <productId> <price> --pricelist <id> [--currency <code>] [--staggered <qty>]\n  Run "geins product price lists" to find the price-list id.');
+                process.exit(1);
+              }
+              const ci = subArgs.indexOf('--currency');
+              const currency = ci !== -1 ? subArgs[ci + 1] : undefined;
+              const si = subArgs.indexOf('--staggered');
+              const staggered = si !== -1 && subArgs[si + 1] != null ? Number(subArgs[si + 1]) : undefined;
+              const write: PriceWrite = { PriceListId: priceListId, ProductId: String(productId), Price: price, Currency: currency, StaggeredCount: staggered };
+              const result = await setProductPrices([write]);
+              if (jsonMode) { console.log(JSON.stringify(result, null, 2)); break; }
+              const updated = result.UpdateCount ?? 0;
+              const invalid = result.Invalid?.length ?? 0;
+              const notFound = result.NotFound?.length ?? 0;
+              if (updated > 0 && invalid === 0 && notFound === 0) {
+                console.log(`✓ Set price ${price}${currency ? ` ${currency}` : ''} on product ${productId} (list ${priceListId})`);
+              } else {
+                console.log(`Updated ${updated}${invalid ? `, ${invalid} invalid` : ''}${notFound ? `, ${notFound} not found` : ''}${result.Message ? ` — ${result.Message}` : ''}`);
+              }
+              break;
+            }
+            console.error('Usage: geins product price <lists|get|set> ...   (run "geins product help")');
+            process.exit(1);
             break;
           }
           case 'variants': {

@@ -2,6 +2,7 @@ import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
 import { getOutputDir, getAccountOutputDir, ensureOutputDir } from '../output/sink.ts';
 import { existsSync, statSync } from 'node:fs';
 import { getActiveSignal } from '../api/abort.ts';
+import { buildCommandCatalog, PITFALLS } from './help-text.ts';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -16,6 +17,7 @@ import {
   buildManifestPromptSection,
   buildApiReferencePromptSection,
   addFact,
+  setPreference,
   extractMemoryBlocks,
 } from '../memory/index.ts';
 
@@ -108,54 +110,9 @@ const SYSTEM_CONTEXT = [
   'You DO NOT explain how to run commands — you RUN them by outputting them in ```bash code blocks.',
   'The system will automatically execute any geins command you output in a code block and return the result.',
   '',
-  'Available commands:',
-  '  geins whoami',
-  '  geins account [markets|languages|locales] [--json]   — account settings (markets, languages, locales) from the v2 Account API',
-  '  geins workflow list',
-  '  geins workflow get <id>',
-  '  geins workflow create --body \'<json>\'',
-  '  geins workflow update <id> --body \'<json>\'',
-  '  geins workflow run <id> [--body \'<json>\']',
-  '  geins workflow manifest',
-  '  geins workflow logs <id>',
-  '  geins workflow enable <id>',
-  '  geins workflow disable <id>',
-  '  geins workflow vars [list|get <name>|set <name> <value>]',
-  '  geins product get <id> [--include <fields>] [--json]   — one product',
-  '  geins product list [filters] [--json]      — query products (--brand --category --article --sellable --in-stock --page --include)',
-  '    --include <fields>: comma-separated child collections to load (default Names; "" = basic data only). Valid:',
-  '      Names, ShortTexts, LongTexts, TechTexts, Items, Prices, Categories, Parameters, Variants, Markets, Images,',
-  '      Feeds, Urls, ShippingFees, RelatedProducts, DiscountCampaigns, LowestPrice. e.g. --include Names,Prices,Images',
-  '  geins product items <id> [--json]          — a product\'s items (SKUs)',
-  '  geins product variants <id> [--json]       — a product\'s variant group (sibling products + dimensions)',
-  '  geins product variants labels [add <name>] — list/register variant dimension labels',
-  '  geins product variants create [--name <n>] [--label <L>] [--product <id>:L=V,L=V] [--json]   — group existing products as variants',
-  '  geins product images <id> [--json]         — list product images',
-  '  geins product images add <id> <file|url> [--name <n>] [--primary] [--position <n>]   — upload an image (jpg/png/gif)',
-  '  geins product images [delete|set-primary|reorder] <id> <imageName> [<pos>]   — manage images',
-  '  geins product brands [list|get <id>|create --name <n> [--external-id <id>]|update <id>|delete <id>]   — brand registry',
-  '  geins product categories [list|get <id>|create --name <code>:<text> [--parent <id>]|update <id>]   — category tree',
-  '  geins product categories assign <productId> <categoryId>     — add a category to a product',
-  '  geins product categories unassign <productId> <categoryId>   — remove a category from a product',
-  '  geins product relation-types [list|add <name>|get <id>|update <id>|delete <id>]   — relation type registry',
-  '  geins product relations <id> [--json]      — list a product\'s related products',
-  '  geins product relations [link|unlink] <id> <relationTypeId> <relatedId...>   — relate/unrelate products',
-  '  geins product help                         — full product command reference',
-  '  geins order list [filters] [--json]        — query orders (--status --email --customer --market --page)',
-  '  geins order get <idOrPublicId> [--json]    — one order (UUID → by public id)',
-  '  geins order count <email>                  — order count for a customer',
-  '  geins order statuses                       — list order status codes',
-  '  geins order status <id> <status>           — change order status',
-  '  geins order update <id> [--external-id <s>] [--parcel <s>] [--external-status <n>]   — partial update',
-  '  geins order comment <id> <text> [--system] — add an order comment',
-  '  geins order cancel-row <orderId> <orderRowId>   — cancel an order row',
-  '  geins order create --body \'<json>\'        — place an order (Order body)',
-  '  geins order help                           — full order command reference',
-  '  geins campaign list [--json]               — list campaigns',
-  '  geins campaign types [--json]              — discount type ids (3=Percentage, 4=Fixed amount)',
-  '  geins campaign get <id> [--json]           — one campaign',
-  '  geins campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <c>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer]   — create a promocode (discount-code) campaign',
-  '  geins output [<dir> | status | off]',
+  buildCommandCatalog(),
+  '',
+  PITFALLS,
   '',
   'FILE OUTPUT:',
   '- Your working directory IS the output folder shown below as "Output folder:". Write ALL files you',
@@ -232,7 +189,10 @@ const SYSTEM_CONTEXT = [
   '- Global variables in workflows: {{vars.variableName}}',
   '- Keep responses concise. Act, don\'t explain.',
   '- Write any files you create into the output folder (your working directory) — see FILE OUTPUT.',
-  '- If you learn something notable about this project, workflows, or user preferences, output it as: [MEMORY]category:fact[/MEMORY] where category is one of: project, workflow, api, preference, pattern.',
+  '- MEMORY: when you learn something durable about this account — a project fact, an API quirk, a naming convention, or a user preference — persist it so future turns remember. Two equivalent ways:',
+  '    • inline tag (preferred, one per line, kept out of the visible reply): [MEMORY]category:the fact[/MEMORY]',
+  '    • or run: geins memory add <category> "the fact"',
+  '  category is one of: project, workflow, api, preference, pattern. Record proactively but only durable facts — not one-off values or chit-chat. Example: [MEMORY]preference:user wants compact output with no IDs[/MEMORY]',
 ].join('\n');
 
 function getMaxPromptTokens(option?: CopilotOption): number {
@@ -786,11 +746,17 @@ export async function addToolResult(command: string, output: string): Promise<vo
 async function processMemoryBlocks(text: string): Promise<void> {
   const blocks = extractMemoryBlocks(text);
   for (const block of blocks) {
-    await addFact({
-      category: block.category,
-      content: block.content,
-      confidence: 0.7,
-      source: 'copilot',
-    });
+    // Preferences are key/value-ish; store them in the preferences map (mirrors the v1
+    // migration) so they show under Preferences, not as a decaying pattern.
+    if (block.category === 'preference') {
+      await setPreference(block.content, 'true');
+    } else {
+      await addFact({
+        category: block.category,
+        content: block.content,
+        confidence: 0.7,
+        source: 'copilot',
+      });
+    }
   }
 }

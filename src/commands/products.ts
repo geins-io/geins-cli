@@ -97,6 +97,8 @@ export interface Product {
   Active: boolean;
   PurchasePrice?: number;
   PurchasePriceCurrency?: string;
+  /** Selling prices, populated when fetched with include=Prices. */
+  Prices?: PriceListPrice[];
   BrandId?: number;
   BrandName?: string;
   SupplierId?: number;
@@ -186,7 +188,9 @@ export interface ProductWrite {
   SupplierId?: number;
   CategoryIds?: number[];
   ExternalId?: string;
-  Vat?: number;
+  /** VAT is set on write by id (e.g. 1 = 25%), not by rate. The read model's numeric
+   * `Vat` (the resolved rate, e.g. 0.25) is NOT writable — sending it 400s. */
+  VatId?: number;
   Weight?: number;
   [key: string]: unknown;
 }
@@ -215,6 +219,15 @@ export async function updateProduct(
     query: { productIdType: options?.idType ?? 0 },
   });
   return envelope.Resource;
+}
+
+/** DELETE /API/Product/{id} — permanently delete a product. `idType` selects how `id`
+ * is interpreted (0 = internal id, 1 = article number, …), defaulting to internal id. */
+export async function deleteProduct(id: string, options?: { idType?: ProductIdType }): Promise<void> {
+  await mgmtRequest(`/API/Product/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    query: { productIdType: options?.idType ?? 0 },
+  });
 }
 
 /** A product's localized text collections — each a LocalizableContent[] keyed by LanguageCode. */
@@ -367,6 +380,147 @@ export async function getProductItems(
 /** Best-effort display name for a product item, falling back to its article number or id. */
 export function productItemName(item: ProductItem): string {
   return (item.Name ?? item.ArticleNumber ?? String(item.ItemId)).trim();
+}
+
+/** The writable shape of a product item / SKU (Product.Models.Write.ProductItem). */
+export interface ProductItemWrite {
+  ItemId?: number;
+  ArticleNumber?: string;
+  Name?: string;
+  Shelf?: string;
+  /** grams */ Weight?: number;
+  /** mm */ Length?: number;
+  /** mm */ Width?: number;
+  /** mm */ Height?: number;
+  Gtin?: string;
+  Active?: boolean;
+  ExternalId?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * POST /API/Product/{productId}/Item — create a SKU on a product. A product holds NO stock until
+ * it has at least one item; stock is then set per item via {@link setProductStock}.
+ */
+export async function createProductItem(
+  productId: string,
+  input: ProductItemWrite,
+  options?: { idType?: ProductIdType },
+): Promise<ProductItem> {
+  const envelope = await mgmtRequest<Envelope<ProductItem>>(
+    `/API/Product/${encodeURIComponent(productId)}/Item`,
+    { method: 'POST', body: input, query: { productIdType: options?.idType ?? 0 } },
+  );
+  return envelope.Resource;
+}
+
+/** How a product-item id is read: 0 internal, 1 article number, 2/3 market-prefixed, 4 external. */
+export type ProductItemIdType = 0 | 1 | 2 | 3 | 4;
+
+/** Stock type: 0 = Available (actual warehouse count), 1 = Oversellable, 2 = Static (always-available cap). */
+export type StockType = 0 | 1 | 2;
+
+/** A single stock write (Product.Models.Write.ProductItemStock). `Id` identifies the item per idType. */
+export interface ProductItemStockWrite {
+  Id: string;
+  Stock: number;
+  StockType?: StockType;
+}
+
+/** PUT /API/Product/Stock — set stock for one or more items (batch). Returns the API's stock result. */
+export async function setProductStock(
+  stocks: ProductItemStockWrite[],
+  options?: { idType?: ProductItemIdType },
+): Promise<unknown> {
+  return mgmtRequest('/API/Product/Stock', {
+    method: 'PUT',
+    body: stocks,
+    query: { productItemIdType: options?.idType ?? 0 },
+  });
+}
+
+/** POST /API/Product/Stock/Query — read stock values for the given internal item ids. */
+export async function queryProductStock(itemIds: number[]): Promise<ProductItemStock[]> {
+  const envelope = await mgmtRequest<Envelope<ProductItemStock[]>>('/API/Product/Stock/Query', {
+    method: 'POST',
+    body: itemIds,
+  });
+  return envelope.Resource ?? [];
+}
+
+// ── Prices ───────────────────────────────────────────────────────────────────
+// Selling prices live in PriceLists (market + currency scoped), NOT on the product
+// (the product's PurchasePrice is the supplier/cost price). See /API/PriceList/*.
+
+/** A price list (PriceList.Models.Read.PriceList). */
+export interface PriceList {
+  Id: number;
+  Name?: string;
+  MarketId?: number;
+  MarketPrefix?: string;
+  Currency?: string;
+  Forced?: boolean;
+  Identifier?: string;
+  Active?: boolean;
+  CreatedAt?: string;
+}
+
+/** A resolved product price row (PriceList.Models.Read.PriceListPrice). */
+export interface PriceListPrice {
+  ProductId?: number;
+  PriceListId?: number;
+  PriceListName?: string;
+  PriceIncVat?: number;
+  PriceExVat?: number;
+  VatRate?: number;
+  Country?: string;
+  Currency?: string;
+  StaggeredCount?: number;
+  ValidFrom?: string;
+  ValidTo?: string;
+}
+
+/** A single price write (PriceList.Models.Write.PriceListPrice). */
+export interface PriceWrite {
+  PriceListId: number;
+  ProductId: string;
+  Price: number;
+  Currency?: string;
+  StaggeredCount?: number;
+}
+
+/** PUT /API/PriceList/Price response — a bulk upsert result. */
+export interface PriceWriteResult {
+  Message?: string;
+  UpdateCount?: number;
+  Invalid?: PriceWrite[];
+  NotFound?: PriceWrite[];
+}
+
+/** GET /API/PriceList/List — all price lists for the account. Returns a bare array or an envelope. */
+export async function listPriceLists(): Promise<PriceList[]> {
+  const res = await mgmtRequest<PriceList[] | Envelope<PriceList[]>>('/API/PriceList/List');
+  return Array.isArray(res) ? res : (res.Resource ?? []);
+}
+
+/** The resolved prices for a product, read via the `Prices` child-collection on the product. */
+export async function getProductPrices(
+  id: string,
+  options?: { idType?: ProductIdType },
+): Promise<PriceListPrice[]> {
+  const product = await getProduct(id, { idType: options?.idType, include: 'Prices' });
+  const prices = product.Prices;
+  return Array.isArray(prices) ? (prices as PriceListPrice[]) : [];
+}
+
+/** PUT /API/PriceList/Price — set/update one or more product prices (bulk upsert). */
+export async function setProductPrices(prices: PriceWrite[]): Promise<PriceWriteResult> {
+  const envelope = await mgmtRequest<Envelope<PriceWriteResult> | PriceWriteResult>('/API/PriceList/Price', {
+    method: 'PUT',
+    body: prices,
+  });
+  // Some PriceList endpoints wrap in an envelope, others return the result directly.
+  return (envelope as Envelope<PriceWriteResult>).Resource ?? (envelope as PriceWriteResult);
 }
 
 /**
@@ -943,10 +1097,26 @@ export async function getBrand(id: number): Promise<Brand> {
   return envelope.Resource;
 }
 
-/** POST /API/Brand — create a brand. */
+/** POST /API/Brand — create a brand.
+ * The API rejects a brand without an ExternalId with a 500 "database error", so when the
+ * caller omits one we derive a slug from the name (e.g. "RS PRO" → "rs-pro"). */
 export async function createBrand(input: BrandWrite): Promise<Brand> {
-  const envelope = await mgmtRequest<Envelope<Brand>>('/API/Brand', { method: 'POST', body: input });
+  const body: BrandWrite = {
+    ...input,
+    ExternalId: input.ExternalId?.trim() || slugify(input.Name),
+  };
+  const envelope = await mgmtRequest<Envelope<Brand>>('/API/Brand', { method: 'POST', body });
   return envelope.Resource;
+}
+
+/** Lowercase, ASCII, dash-separated slug suitable for an ExternalId fallback. */
+function slugify(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'brand';
 }
 
 /**

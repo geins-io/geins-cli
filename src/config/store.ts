@@ -6,6 +6,8 @@ const CONFIG_DIR = join(homedir(), '.config', 'geins');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const SESSION_PATH = join(CONFIG_DIR, 'session.json');
 const CREDENTIALS_PATH = join(CONFIG_DIR, 'credentials.json');
+const INPUT_HISTORY_PATH = join(CONFIG_DIR, 'input-history.json');
+const MAX_INPUT_HISTORY = 200;
 
 export interface CopilotConfig {
   cli: string;
@@ -102,6 +104,29 @@ export async function loadConfig(): Promise<GeinsConfig> {
 
 export async function saveConfig(config: GeinsConfig): Promise<void> {
   await writeJson(CONFIG_PATH, config);
+}
+
+/** TUI up-arrow input recall, bucketed by mode (copilot prompts vs cli commands). */
+export interface InputHistory {
+  copilot: string[];
+  command: string[];
+}
+
+function cleanList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
+}
+
+/** Load both input-history buckets (oldest → newest) for recall across sessions. */
+export async function loadInputHistory(): Promise<InputHistory> {
+  const data = await readJson<Partial<InputHistory>>(INPUT_HISTORY_PATH);
+  return { copilot: cleanList(data?.copilot), command: cleanList(data?.command) };
+}
+
+export async function saveInputHistory(history: InputHistory): Promise<void> {
+  await writeJson(INPUT_HISTORY_PATH, {
+    copilot: history.copilot.slice(-MAX_INPUT_HISTORY),
+    command: history.command.slice(-MAX_INPUT_HISTORY),
+  });
 }
 
 export async function loadSession(): Promise<StoredSession | null> {
