@@ -86,7 +86,7 @@ export function useAppState() {
       }
       // Set the terminal window/tab title now that the session id exists. OSC 0 is
       // out-of-band, so it doesn't disturb Ink's rendering.
-      setBaseTitle(`Geins Synapse - ${sessionId}`);
+      setBaseTitle(`Synapse - ${sessionId}`);
       if (config.theme) {
         setStatus(s => ({ ...s, theme: config.theme! }));
       }

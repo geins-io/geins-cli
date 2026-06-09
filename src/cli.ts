@@ -147,7 +147,7 @@ async function launchTui(resume?: { open: boolean; id?: string }): Promise<void>
 
   // Set the terminal window/tab title (held while the TUI runs). The app refines this
   // to include the session id once the session starts.
-  setBaseTitle('Geins Synapse');
+  setBaseTitle('Synapse');
 
   // Clear the screen (and scrollback) so the TUI starts on a clean canvas.
   process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
@@ -156,20 +156,18 @@ async function launchTui(resume?: { open: boolean; id?: string }): Promise<void>
     exitOnCtrlC: false,
   });
 
-  // Clean repaint on terminal WIDTH change. The whole TUI is one inline Ink frame; when the width
-  // changes the terminal reflows the on-screen text, but Ink erases the previous frame by moving the
-  // cursor up a fixed number of lines — after a reflow those lines no longer line up, so stale rows
-  // (ghost box borders, duplicated headers) are left behind. We clear the VISIBLE screen first, then
-  // Ink's own resize render (which always differs at a new width) repaints onto a clean canvas.
-  // `prependListener` runs this BEFORE Ink's resize handler (registered during render()).
-  // NB: erase the screen only (`2J`) — do NOT use `3J`, which wipes the scrollback buffer and would
-  // destroy the user's scroll-back history on every resize. Width-only: a pure height change doesn't
-  // reflow, and clearing then would risk a blank frame if Ink dedupes unchanged output, so we skip it.
+  // Clean rebuild on terminal WIDTH change. Committed history is rendered via Ink's <Static>, whose
+  // lines are already printed to scrollback and don't reflow cleanly at a new width (ghost borders,
+  // duplicated headers). ChatHistory keys <Static> on the column count, so a width change remounts it
+  // and RE-EMITS every item at the new width. To stop the stale old-width copies from piling up in
+  // scrollback, we wipe the screen AND scrollback (`3J`) here first; Static then rewrites the full
+  // history at the new width, so nothing is actually lost. `prependListener` runs this BEFORE Ink's
+  // resize handler. Width-only: a pure height change doesn't reflow, so we leave scrollback intact.
   const stdout = process.stdout;
   let lastColumns = stdout.columns;
   stdout.prependListener('resize', () => {
     if (stdout.columns !== lastColumns) {
-      stdout.write('\x1b[2J\x1b[H');
+      stdout.write('\x1b[2J\x1b[3J\x1b[H');
     }
     lastColumns = stdout.columns;
   });

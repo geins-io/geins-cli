@@ -37,6 +37,8 @@ interface WelcomeProps {
   logo?: LogoVariant;
   prefix?: boolean;
   suffix?: boolean;
+  /** Show the central wordmark (the "GEINS"/"LITIUM" art). Off → just the prefix + suffix flourishes. */
+  wordmark?: boolean;
   name?: string;
 }
 
@@ -46,7 +48,7 @@ const AUTH_NOTICE: Partial<Record<AuthState, string>> = {
   expired: 'Your session has expired. Run /login to re-authenticate.',
 };
 
-export function Welcome({ version, user, account, accountName, apiAccount, authState, logo = 'geins', prefix = true, suffix = true, name = 'Geins Synapse' }: WelcomeProps) {
+export function Welcome({ version, user, account, accountName, apiAccount, authState, logo = 'geins', prefix = true, suffix = true, wordmark = true, name = 'Synapse' }: WelcomeProps) {
   const { columns, rows: windowRows } = useWindowSize();
 
   // Degrade the banner by available height so the whole frame stays inside the viewport. A frame
@@ -56,14 +58,17 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
   // clear `rows` with room for the input box, which shares the same Ink frame (~8 lines, matching the
   // reserve in ChatHistory): full banner ≈30 lines, +logo+hints ≈16, logo only ≈12.
   const h = windowRows ?? 24;
-  const showLogo = h >= 21;
+  // BRAND_LOGO=none hides the ASCII banner entirely, leaving just the text identity line (the name).
+  const showLogo = logo !== 'none' && h >= 21;
   const showHints = h >= 25;
   const showIntroBox = h >= 39;
 
   // Pick the wordmark and its matching flourishes, then optionally wrap with the prefix ("/" for geins,
   // "_" for litium) and the suffix ("SYNAPSE" for geins, "TERMINAL" for litium).
   const isLitium = logo === 'litium';
-  const base = isLitium ? LITIUM_LOGO : columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
+  const fullBase = isLitium ? LITIUM_LOGO : columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
+  // Drop the wordmark but keep its row count, so prefix/suffix art still aligns — leaves just the flourishes.
+  const base = wordmark ? fullBase : fullBase.map(() => '');
   const promptArt = isLitium ? LITIUM_PROMPT : PROMPT;
   const suffixArt = isLitium ? LITIUM_SUFFIX : SUFFIX;
 

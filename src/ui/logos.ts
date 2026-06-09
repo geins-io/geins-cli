@@ -1,7 +1,7 @@
 // ASCII-art logos for the welcome banner, in the ANSI Shadow block style.
 // Rendered through the gradient in Welcome.tsx.
 
-export type LogoVariant = 'geins' | 'litium';
+export type LogoVariant = 'geins' | 'litium' | 'none';
 
 // "GEINS" wordmark — wrapped with PROMPT ("/") and SUFFIX ("SYNAPSE") in Welcome.
 export const LOGO_FULL = [
