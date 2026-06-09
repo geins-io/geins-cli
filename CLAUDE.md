@@ -8,7 +8,8 @@ This file is for whoever **extends the CLI**. For *using* a command, run `geins 
 ```bash
 bun install
 bun run dev          # interactive TUI
-bun run dev:web      # web-based UI on port 3100
+bun run serve        # headless HTTP/WS backend (the desktop sidecar) — `geins serve --port 0 --token <t>`
+bun run tauri:dev    # desktop app (stages the CLI as a sidecar, then runs Tauri)
 bun link             # then `geins ...` runs this source directly
 geins --help
 ```
@@ -19,18 +20,27 @@ geins --help
 src/
   bin.ts              # entry point
   cli.ts              # direct CLI dispatcher (non-TTY) + TUI launcher
-  web.ts              # web UI server
+  version.ts          # ★ single version source (reads package.json) — don't hardcode versions
+  runtime.ts          # selfInvocation(): re-invoke THIS binary for subcommands (compiled vs bun run)
+  server/serve.ts     # `geins serve` — localhost HTTP/WS backend for the desktop shell
+  server/web-shell.ts # the desktop web UI (self-contained HTML string, bundled into the binary)
   api/client.ts       # v2 gateway client — JWT (auto-refresh) + x-account-key
   api/live-client.ts  # live Management/Merchant client — Basic auth + X-ApiKey (api-key profiles)
   api/errors.ts       # error types and formatting
   auth/                # login/verify/refresh, JWT parsing
   config/store.ts      # ~/.config/geins/ session, config, api-key profiles
-  config/env.ts        # API base URLs
+  config/env.ts        # API base URLs + getUpdateManifestUrl()
   commands/            # one file per command group — the API functions live here
     help-text.ts       # ★ single source of truth for command docs + copilot catalog + PITFALLS
+    update.ts          # `geins update` — CLI self-update (OTA) from the GitHub Releases manifest
     products.ts order.ts campaigns.ts merchant.ts account.ts workflows.ts copilot.ts ...
   ui/                  # Ink TUI components
   output/              # terminal formatting (colors, banner, json)
+src-tauri/            # Tauri v2 desktop wrapper (Rust) — spawns the CLI as a serve sidecar
+scripts/
+  build-cli.ts        # bun build --compile → standalone binary (stubs react-devtools-core)
+  stage-sidecar.ts    # compile + place the binary as a Tauri sidecar (geins-<triple>)
+.github/workflows/release.yml  # tag-driven build+sign+publish for CLI binaries AND desktop bundles
 ```
 
 ## Two API planes (don't conflate them)
@@ -42,6 +52,41 @@ src/
 | Merchant API (GraphQL) | (storefront) | `X-ApiKey` | `merchant` | `api/live-client.ts` (`merchantQuery()`) |
 
 JWT session → `~/.config/geins/session.json`. API-key profiles (per account) → see `geins apikey`.
+
+## Three faces, one binary
+
+The same code ships as a terminal TUI, a CLI, and a Tauri **desktop app** — all from one
+`bun build --compile` binary (`bun run build:cli`).
+
+```
+geins                 → Ink TUI (needs a TTY)
+geins <cmd> [args]    → direct CLI
+geins serve           → headless HTTP/WS backend on 127.0.0.1 (server/serve.ts)
+geins update          → CLI self-update (OTA)
+
+Desktop app (src-tauri/): Rust spawns `geins serve --port 0 --token <secret>`,
+reads the port from stdout, and points the webview at that local server. The web
+shell (server/web-shell.ts) talks plain HTTP/WS to the sidecar — NO Tauri IPC.
+```
+
+Key invariants when extending:
+- **Never spawn a bare `geins`** for subcommands — use `selfInvocation()` from `src/runtime.ts`
+  (a compiled binary / the sidecar isn't on PATH). This is how the copilot agent loop and
+  `serve`'s `/command` re-invoke the CLI.
+- **Never hardcode the version** — import `VERSION` from `src/version.ts` (reads package.json).
+- `serve` is token-gated and localhost-only; it reuses existing headless functions
+  (`chatStream`, `executeGeinsCommand`, the `auth/` login flow, `loadSession`) — don't duplicate logic.
+
+### OTA updates (both faces, one manifest)
+
+`.github/workflows/release.yml` (tag `v*`) builds + signs CLI binaries and Tauri bundles for all
+platforms and publishes **one** `latest.json` to GitHub Releases:
+- `platforms.<key>` (signed) → consumed by `tauri-plugin-updater` (checks on launch, in `src-tauri/src/lib.rs`).
+- `cli.<key>` (`{url, sha256}`) → consumed by `geins update` (`src/commands/update.ts`).
+
+Signing: a Tauri updater keypair lives in CI secrets (`TAURI_SIGNING_PRIVATE_KEY[_PASSWORD]`); the
+public key is in `src-tauri/tauri.conf.json`. **Private keys never get committed** (`.secrets/` is gitignored).
+Override the manifest URL for staging with `GEINS_UPDATE_URL`.
 
 ## Command surface
 

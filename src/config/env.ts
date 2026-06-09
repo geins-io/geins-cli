@@ -59,3 +59,15 @@ export function getLogoSuffix(): boolean {
 }
 
 export const isInteractive = process.stdin.isTTY ?? false;
+
+/**
+ * Base URL for OTA release artifacts + the `latest.json` update manifest.
+ * Defaults to the GitHub Releases "latest" download path. Override with
+ * GEINS_UPDATE_URL (e.g. to point at a staging release for testing).
+ */
+export function getUpdateManifestUrl(): string {
+  return (
+    process.env['GEINS_UPDATE_URL'] ??
+    'https://github.com/geins-io/geins-cli/releases/latest/download/latest.json'
+  );
+}

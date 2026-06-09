@@ -1,0 +1,169 @@
+name: release
+
+# Tag-driven release. Push a tag like `v0.1.1` (or run manually) to build the
+# standalone CLI binaries AND the Tauri desktop bundles for every platform, sign
+# them, and publish a single `latest.json` manifest that BOTH updaters read:
+#   - the CLI self-updater (src/commands/update.ts) reads the `cli` section
+#   - tauri-plugin-updater reads the `platforms` section
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. v0.1.1)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Resolve the tag from either trigger.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            rust_target: aarch64-apple-darwin
+            bun_target: bun-darwin-arm64
+            platform_key: darwin-aarch64
+            cli_name: geins-aarch64-apple-darwin
+          - os: macos-13
+            rust_target: x86_64-apple-darwin
+            bun_target: bun-darwin-x64
+            platform_key: darwin-x86_64
+            cli_name: geins-x86_64-apple-darwin
+          - os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bun_target: bun-linux-x64
+            platform_key: linux-x86_64
+            cli_name: geins-x86_64-unknown-linux-gnu
+          - os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            bun_target: bun-windows-x64
+            platform_key: windows-x86_64
+            cli_name: geins-x86_64-pc-windows-msvc.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      # Tauri Linux build dependencies.
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
+            libayatana-appindicator3-dev build-essential file
+
+      - name: Install JS deps
+        run: bun install
+
+      # Keep the version single-sourced: stamp package.json from the tag so both
+      # the CLI (reads package.json) and Tauri (reads ../package.json) agree.
+      - name: Sync version from tag
+        shell: bash
+        run: |
+          VER="${RELEASE_TAG#v}"
+          bun -e "const f='package.json';const p=require('./'+f);p.version='${VER}';require('fs').writeFileSync(f, JSON.stringify(p,null,2)+'\n')"
+          echo "Building version ${VER}"
+
+      # 1) Standalone CLI binary + checksum (the `cli` OTA channel).
+      - name: Build CLI binary
+        shell: bash
+        run: bun run build:cli --outfile "dist/${{ matrix.cli_name }}" --target "${{ matrix.bun_target }}"
+
+      - name: Checksum CLI binary
+        id: cli
+        shell: bash
+        run: |
+          FILE="dist/${{ matrix.cli_name }}"
+          if command -v sha256sum >/dev/null; then SHA=$(sha256sum "$FILE" | cut -d' ' -f1);
+          else SHA=$(shasum -a 256 "$FILE" | cut -d' ' -f1); fi
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/${{ matrix.cli_name }}" >> "$GITHUB_OUTPUT"
+
+      # 2) Stage the same binary as the Tauri sidecar so the desktop bundle embeds it.
+      - name: Stage sidecar
+        shell: bash
+        run: bun run stage:sidecar --triple "${{ matrix.rust_target }}" --bun-target "${{ matrix.bun_target }}"
+
+      # 3) Build + sign the desktop bundle. tauri-action also emits the signed
+      #    updater artifacts that feed the `platforms` section of latest.json.
+      - name: Build desktop app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'Geins ${{ env.RELEASE_TAG }}'
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.rust_target }}
+
+      # 4) Upload the CLI binary to the same release.
+      - name: Upload CLI binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${RELEASE_TAG}" "dist/${{ matrix.cli_name }}" --clobber
+
+      # 5) Record this platform's CLI entry for the manifest assembly job.
+      - name: Emit CLI manifest fragment
+        shell: bash
+        run: |
+          mkdir -p frags
+          cat > "frags/${{ matrix.platform_key }}.json" <<EOF
+          { "${{ matrix.platform_key }}": { "url": "${{ steps.cli.outputs.url }}", "sha256": "${{ steps.cli.outputs.sha256 }}" } }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-frag-${{ matrix.platform_key }}
+          path: frags/*.json
+
+  # Assemble the final latest.json: take the tauri-generated updater JSON
+  # (platforms section) and inject the `cli` section from the build fragments.
+  manifest:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-frag-*
+          path: frags
+          merge-multiple: true
+
+      - name: Assemble and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VER="${RELEASE_TAG#v}"
+          # Pull the tauri-generated updater manifest from the draft release.
+          gh release download "${RELEASE_TAG}" --repo "${{ github.repository }}" --pattern 'latest.json' --output tauri.json --clobber || echo '{}' > tauri.json
+          # Merge all per-platform CLI fragments into one object.
+          jq -s 'add' frags/*.json > cli.json
+          # Produce the combined manifest: tauri `platforms` + our `cli` + version.
+          jq -n --slurpfile t tauri.json --slurpfile c cli.json --arg v "$VER" \
+            '($t[0] // {}) * { version: $v, cli: $c[0] }' > latest.json
+          cat latest.json
+          gh release upload "${RELEASE_TAG}" latest.json --repo "${{ github.repository }}" --clobber
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${RELEASE_TAG}" --repo "${{ github.repository }}" --draft=false

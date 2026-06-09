@@ -3,6 +3,7 @@ import { getOutputDir, getAccountOutputDir, ensureOutputDir } from '../output/si
 import { existsSync, statSync } from 'node:fs';
 import { getActiveSignal } from '../api/abort.ts';
 import { buildCommandCatalog, PITFALLS } from './help-text.ts';
+import { selfInvocation } from '../runtime.ts';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -802,7 +803,11 @@ export function tokenizeArgs(input: string): string[] {
 
 export async function executeGeinsCommand(command: string): Promise<{ output: string; exitCode: number }> {
   const args = tokenizeArgs(command.replace(/^geins\s+/, ''));
-  const proc = Bun.spawn(['geins', ...args], {
+  // Re-invoke THIS executable rather than a `geins` on PATH — a compiled binary
+  // or the Tauri sidecar may not be installed on PATH. In a compiled build
+  // execPath IS the binary; under `bun run`/`bun link` execPath is `bun`, so we
+  // also pass the entry script (Bun.main).
+  const proc = Bun.spawn([...selfInvocation(), ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
     cwd: process.cwd(),

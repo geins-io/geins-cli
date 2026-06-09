@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Geins",
+  "version": "../package.json",
+  "identifier": "io.geins.cli",
+  "build": {
+    "frontendDist": "web-dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Geins",
+        "width": 1100,
+        "height": 760,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"],
+    "externalBin": ["binaries/geins"],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/geins-io/geins-cli/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBQThENTU0NEJBMjQ1RDkKUldUWlJhSkxWTldvT3FhdFpONDBiVit6blBTcHVGaG54c0VxVUIzUGk1Y0hoalh0d1dNRExydVoK"
+    }
+  }
+}

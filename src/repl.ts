@@ -20,8 +20,7 @@ import {
   drawMenuOverlay,
   clearMenuOverlay,
 } from './output/terminal.ts';
-
-const VERSION = '0.1.0';
+import { VERSION } from './version.ts';
 
 // --- Intercept console.error/log to route through scroll region ---
 

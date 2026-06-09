@@ -84,8 +84,7 @@ import { chat, getCopilotConfig, clearConversationHistory, getMemoryEnabled, set
 import { outputJson } from './output/format.ts';
 import { setBaseTitle } from './output/title.ts';
 import { PRODUCT_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP } from './commands/help-text.ts';
-
-const VERSION = '0.1.0';
+import { VERSION } from './version.ts';
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
 async function resolveBody(args: string[]): Promise<unknown> {
@@ -288,6 +287,16 @@ async function runDirect(rawArgs: string[]): Promise<void> {
 
   try {
     switch (commandName) {
+      case 'serve': {
+        const { serveCommand } = await import('./server/serve.ts');
+        await serveCommand(commandArgs);
+        return;
+      }
+      case 'update': {
+        const { updateCommand } = await import('./commands/update.ts');
+        await updateCommand(commandArgs);
+        return;
+      }
       case 'whoami': {
         const session = await loadSession();
         if (!session) notLoggedIn();

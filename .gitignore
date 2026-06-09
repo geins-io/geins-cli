@@ -11,6 +11,14 @@ out
 dist
 *.tgz
 
+# tauri
+src-tauri/target
+src-tauri/gen
+src-tauri/binaries
+
+# signing keys — NEVER commit private keys (store in CI secrets)
+.secrets
+
 # code coverage
 coverage
 *.lcov

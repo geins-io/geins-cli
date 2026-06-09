@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
+import { VERSION } from '../version.ts';
 import Spinner from 'ink-spinner';
 import { ChatHistory } from './ChatHistory.tsx';
 import { ChatInput } from './ChatInput.tsx';
@@ -111,8 +112,6 @@ import {
   type CheckoutBranding,
   type CustomerType,
 } from '../commands/merchant.ts';
-
-const VERSION = '0.1.0';
 
 /**
  * Split a slash-command line into tokens, honoring double/single quotes and backslash

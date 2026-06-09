@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the loading window. The app navigates to a local http origin which is isolated from Tauri IPC by design.",
+  "windows": ["main"],
+  "permissions": ["core:default", "updater:default"]
+}

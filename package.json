@@ -9,9 +9,16 @@
   "scripts": {
     "dev": "bun run src/bin.ts",
     "test": "bun test",
-    "generate:api-ref": "bun run scripts/generate-api-ref.ts"
+    "generate:api-ref": "bun run scripts/generate-api-ref.ts",
+    "build:cli": "bun run scripts/build-cli.ts",
+    "serve": "bun run src/bin.ts serve",
+    "stage:sidecar": "bun run scripts/stage-sidecar.ts",
+    "tauri": "tauri",
+    "tauri:dev": "bun run stage:sidecar && tauri dev",
+    "tauri:build": "bun run stage:sidecar && tauri build"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
     "yaml": "^2.9.0"
