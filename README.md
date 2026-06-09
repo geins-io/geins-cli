@@ -33,16 +33,6 @@ geins --help
 geins
 ```
 
-### Web UI
-
-```bash
-geins --web
-# or
-bun run dev:web
-```
-
-Opens a web-based UI on port 3100.
-
 ### Direct CLI
 
 ```bash
@@ -87,7 +77,6 @@ So the normal loop is just: **edit → type `geins` → see the change.** No reb
 
 ```bash
 bun run dev          # interactive TUI (same as `geins`)
-bun run dev:web      # web UI on port 3100
 ```
 
 ### Testing
