@@ -36,7 +36,9 @@ pub fn run() {
             let sidecar = app
                 .shell()
                 .sidecar("geins")?
-                .args(["serve", "--port", "0", "--token", &token]);
+                // --watch-parent: the sidecar self-exits if this app dies, so a
+                // hard kill (SIGKILL/crash) that skips RunEvent::Exit can't leak it.
+                .args(["serve", "--port", "0", "--token", &token, "--watch-parent"]);
             let (mut rx, child) = sidecar.spawn()?;
             app.state::<Sidecar>().0.lock().unwrap().replace(child);
 
@@ -82,13 +84,21 @@ pub fn run() {
 
             Ok(())
         })
+        // Closing the window should quit the app (single-window utility).
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(child) = window.state::<Sidecar>().0.lock().unwrap().take() {
+                window.app_handle().exit(0);
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // Kill the sidecar on ANY exit path, not just window close — otherwise a
+        // crash or quit leaves an orphaned `geins serve` process running.
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(child) = app_handle.state::<Sidecar>().0.lock().unwrap().take() {
                     let _ = child.kill();
                 }
             }
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        });
 }

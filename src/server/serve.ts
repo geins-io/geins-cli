@@ -72,8 +72,26 @@ async function finalizeLogin(auth: AuthResponse, accountKey?: string) {
   return { stage: 'done' as const };
 }
 
+/**
+ * When run as a desktop sidecar (`--watch-parent`), self-exit if the parent
+ * process dies. The OS reparents orphans to PID 1, so a PPID of 1 (when it
+ * didn't start as 1) means our launcher is gone — guarantees no orphaned server
+ * even on a hard kill that skips the app's normal shutdown.
+ */
+function watchParent(): void {
+  if (process.ppid === 1) return; // started detached already — nothing to watch
+  const timer = setInterval(() => {
+    if (process.ppid === 1) {
+      clearInterval(timer);
+      process.exit(0);
+    }
+  }, 1000);
+  timer.unref?.();
+}
+
 export async function serveCommand(args: string[]): Promise<void> {
   const { port, token, host } = parseServeArgs(args);
+  if (args.includes('--watch-parent')) watchParent();
 
   const authorized = (req: Request): boolean => {
     if (!token) return true; // no token configured → open (dev convenience)
