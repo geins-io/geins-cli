@@ -103,20 +103,20 @@ export async function request<T = unknown>(path: string, options?: RequestOption
 
     if (!retry.ok) {
       const err = await ApiError.fromResponse(retry, method, path);
-      await recordResponse({ method, path, status: retry.status, error: err.body || err.message });
+      await recordResponse({ method, path, query: options?.query, body: options?.body, status: retry.status, error: err.body || err.message });
       throw err;
     }
     const retryData = (await retry.json()) as T;
-    await recordResponse({ method, path, status: retry.status, data: retryData });
+    await recordResponse({ method, path, query: options?.query, body: options?.body, status: retry.status, data: retryData });
     return retryData;
   }
 
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, method, path);
-    await recordResponse({ method, path, status: res.status, error: err.body || err.message });
+    await recordResponse({ method, path, query: options?.query, body: options?.body, status: res.status, error: err.body || err.message });
     throw err;
   }
   const data = (await res.json()) as T;
-  await recordResponse({ method, path, status: res.status, data });
+  await recordResponse({ method, path, query: options?.query, body: options?.body, status: res.status, data });
   return data;
 }

@@ -37,7 +37,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   api: ['GET', 'POST', 'PUT', 'DELETE'],
   output: ['status', 'off'],
   copilot: ['provider', 'set'],
-  memory: ['list', 'add', 'export', 'clear'],
+  memory: ['list', 'add', 'export', 'clear', 'on', 'off', 'status'],
 };
 
 const ARG_HINTS: Record<string, Record<string, string>> = {

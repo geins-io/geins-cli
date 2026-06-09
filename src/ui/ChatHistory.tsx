@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, useWindowSize } from 'ink';
+import { estimateHeight } from './measure.ts';
 
 interface ChatHistoryProps {
   ready: boolean;
@@ -13,12 +14,19 @@ const keyFor = (component: React.ReactNode, index: number): string =>
     ? String(component.key)
     : `msg-${index}`;
 
-// The Welcome banner is many lines tall (logo + intro box + hints). It counts as a single
-// item, so an item-count cap badly under-estimates the frame height and lets the banner push
-// the frame past the viewport — which makes Ink repaint/scroll on every spinner tick (the
-// "scrollbar flickers when thinking" bug). Budget by lines and give the banner its real height.
-const WELCOME_LINES = 30;
-const DEFAULT_ITEM_LINES = 1;
+// Rows the input box (two separators + prompt + footer) occupies below the history, plus a
+// safety margin. We bias this HIGH on purpose: a frame that ends up a row or two short just
+// leaves blank space, but a frame that's even one row too tall makes Ink repaint/scroll on
+// every spinner tick — that's the "flickers while thinking" bug. Under-filling is free;
+// overflowing is the failure mode, so round against it.
+const INPUT_RESERVE = 9;
+
+// Heights are ESTIMATED in pure JS (see measure.ts) — NOT measured via Ink's renderToString, which
+// lays out on the shared yoga-wasm module and crashes the process ("Out of bounds call_indirect")
+// whenever it runs while the live app is rendering. estimateHeight touches no yoga, so it's safe here.
+function measureHeight(node: React.ReactNode, cols: number): number {
+  return estimateHeight(node, cols);
+}
 
 /**
  * Renders the chat history inline (NOT via Ink's <Static>) so the entire UI is one
@@ -26,9 +34,9 @@ const DEFAULT_ITEM_LINES = 1;
  * committed to scrollback and can never be repainted, which left broken fragments on resize.
  *
  * The trade-off: Ink glitches (flickers/scrolls) when its frame is taller than the viewport,
- * so we cap the visible history to what fits the window, measured in estimated LINES rather
- * than item count. Older items scroll off the top and are no longer shown (there's no native
- * scrollback for inline content).
+ * so we cap the visible history to what fits the window. Item heights are measured at mutation
+ * time (see measure.ts) and only READ here via cachedHeight — measuring during render crashes
+ * yoga. Older items scroll off the top and are no longer shown (no native scrollback inline).
  */
 export function ChatHistory({
   ready,
@@ -36,29 +44,27 @@ export function ChatHistory({
   queuedComponents,
   liveComponent,
 }: ChatHistoryProps) {
-  const { rows } = useWindowSize();
+  const { rows, columns } = useWindowSize();
+  const cols = columns ?? 80;
 
   const showWelcome = ready && !!welcomeComponent;
   const items = showWelcome
     ? [welcomeComponent, ...queuedComponents]
     : queuedComponents;
 
-  // Reserve rows for the input box (two separators + prompt + footer) plus a little slack,
-  // and for the live component when one is showing.
-  const reserved = 8 + (liveComponent ? 3 : 0);
-  const budget = Math.max(5, (rows ?? 24) - reserved);
+  const budget = Math.max(3, (rows ?? 24) - INPUT_RESERVE);
 
-  // Walk newest → oldest, keeping items until the line budget is spent. Always keep at least
-  // one item so the screen is never blank. The tall Welcome banner (items[0]) is dropped as
-  // soon as it would overflow, which keeps the live frame inside the viewport.
-  const linesFor = (index: number) =>
-    showWelcome && index === 0 ? WELCOME_LINES : DEFAULT_ITEM_LINES;
-
-  let used = 0;
+  // The live component is always shown and gets first claim on the budget. Walk the history
+  // newest → oldest, keeping items until the remaining budget is spent. When there's no live
+  // component we force-keep the newest item so the screen is never blank; when a live component
+  // is on screen we drop everything that doesn't fit (the screen still isn't blank) to keep the
+  // frame inside the viewport.
+  let used = measureHeight(liveComponent, cols);
   let start = items.length;
   for (let i = items.length - 1; i >= 0; i--) {
-    const h = linesFor(i);
-    if (used + h > budget && start < items.length) break;
+    const h = measureHeight(items[i], cols);
+    const isNewest = start === items.length;
+    if (used + h > budget && !(isNewest && !liveComponent)) break;
     used += h;
     start = i;
   }

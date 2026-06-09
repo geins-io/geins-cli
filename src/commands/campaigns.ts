@@ -74,6 +74,12 @@ export interface CampaignWrite {
   OncePerCustomer?: boolean;
   Priority?: number;
   Enabled?: boolean;
+  /**
+   * Admin "Only include discounted products". The API DEFAULTS this to `true` when omitted,
+   * which silently restricts the campaign to already-discounted products — almost never what a
+   * plain promo code wants. Always send it explicitly (false for a normal store-wide discount).
+   */
+  UseSalePrice?: boolean;
   [key: string]: unknown;
 }
 
@@ -131,6 +137,11 @@ export interface PromoCodeCampaignOptions {
   oncePerCustomer?: boolean;
   priority?: number;
   enabled?: boolean;
+  /**
+   * Restrict the campaign to already-discounted products (admin "Only include discounted products",
+   * i.e. UseSalePrice). Defaults to false — a plain promo code should apply to all products.
+   */
+  onlyDiscountedProducts?: boolean;
 }
 
 /**
@@ -145,6 +156,9 @@ export function buildPromoCodeCampaign(opts: PromoCodeCampaignOptions): Campaign
     Title: opts.title ?? [],
     Enabled: opts.enabled ?? true,
     ValidFrom: opts.validFrom ?? new Date().toISOString(),
+    // The API defaults UseSalePrice to true (admin "Only include discounted products"), which would
+    // silently limit the code to discounted products. Force it off unless the caller opts in.
+    UseSalePrice: opts.onlyDiscountedProducts ?? false,
   };
   if (opts.amounts && Object.keys(opts.amounts).length > 0) {
     body.CampaignTypeId = CAMPAIGN_TYPE.fixedAmount;

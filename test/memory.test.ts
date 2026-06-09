@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { KnowledgeBase } from '../src/memory/types.ts'; // type-only: erased, never loads store.ts
 
-// CRITICAL ISOLATION: redirect ALL memory state to a throwaway dir via GEINS_CONFIG_DIR. We can't
+// CRITICAL ISOLATION: redirect ALL memory state to a throwaway dir via GEINS_SYNAPSE_DIR. We can't
 // use HOME — Bun's os.homedir() caches at process start and ignores a runtime-mutated process.env.HOME,
-// so the store would still write to the real ~/.config/geins. store.ts reads GEINS_CONFIG_DIR lazily
+// so the store would still write to the real ~/.synapse. store.ts reads GEINS_SYNAPSE_DIR lazily
 // (per-operation), so setting it here, before any store call, fully isolates the suite.
 const TMP_HOME = mkdtempSync(join(tmpdir(), 'geins-mem-'));
-process.env.GEINS_CONFIG_DIR = TMP_HOME;
+process.env.GEINS_SYNAPSE_DIR = TMP_HOME;
 
 let mem: typeof import('../src/memory/knowledge.ts');
 let cmd: typeof import('../src/memory/command-context.ts');

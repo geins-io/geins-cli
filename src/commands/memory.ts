@@ -120,7 +120,7 @@ function renderMarkdown(kb: KnowledgeBase): string {
 /**
  * `geins memory export [--json]` — write a human-readable snapshot of this account's memory
  * INTO the output folder (the same account-nested dir the copilot writes to, or cwd if output
- * is disabled). The canonical store stays in ~/.config/geins/memory; this is a shareable copy.
+ * is disabled). The canonical store stays in the global Synapse folder (~/.synapse); this is a shareable copy.
  * Returns the file path written.
  */
 export async function exportMemory(format: 'md' | 'json'): Promise<string> {

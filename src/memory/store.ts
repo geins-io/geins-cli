@@ -1,17 +1,19 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { mkdir, readFile, writeFile, appendFile, stat, rename, access } from 'node:fs/promises';
 import { loadSession, loadCredentialsStore } from '../config/store.ts';
 
 /**
- * Root of all memory state, resolved LAZILY (not captured at import time). `GEINS_CONFIG_DIR`
- * overrides the `~/.config/geins` base — used to relocate or sandbox state, and the only reliable
- * way to redirect it in tests: Bun's `os.homedir()` caches at process start and ignores a
- * runtime-mutated `process.env.HOME`, so a test must set `GEINS_CONFIG_DIR` instead.
+ * The global Synapse memory folder — the single root every model backend and every account
+ * reads from and writes to. This is what the `/memory` command refers to. Resolved LAZILY
+ * (not captured at import time). `GEINS_SYNAPSE_DIR` overrides the default `~/.synapse` base
+ * (legacy `GEINS_CONFIG_DIR` is still honored as a fallback) — used to relocate or sandbox
+ * state, and the only reliable way to redirect it in tests: Bun's `os.homedir()` caches at
+ * process start and ignores a runtime-mutated `process.env.HOME`, so a test must set
+ * `GEINS_SYNAPSE_DIR` instead. Per-account subfolders live directly inside this root.
  */
 function baseDir(): string {
-  const root = process.env.GEINS_CONFIG_DIR || join(homedir(), '.config', 'geins');
-  return join(root, 'memory');
+  return process.env.GEINS_SYNAPSE_DIR || process.env.GEINS_CONFIG_DIR || join(homedir(), '.synapse');
 }
 function sharedDir(): string {
   return join(baseDir(), '_shared');
@@ -50,6 +52,10 @@ export async function resolveMemoryAccountKey(): Promise<string | undefined> {
 
 /** Resolve the composite key for the active session + apikey profile and apply it. */
 export async function applyMemoryAccount(): Promise<string | undefined> {
+  // Relocate a pre-Synapse store to ~/.synapse before anything reads from it — otherwise a
+  // read-only command (memory list, copilot prompt build) would see the empty new root and
+  // appear to have lost all memory until the first write triggered the move.
+  await migrateSynapseRoot();
   const key = await resolveMemoryAccountKey();
   setMemoryAccount(key);
   return key;
@@ -93,6 +99,32 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+let rootMigrationDone = false;
+
+/**
+ * One-time relocation of the pre-Synapse store. Earlier versions kept memory at
+ * `~/.config/geins/memory`; everything now lives in the global `~/.synapse` folder. If the new
+ * root doesn't exist yet but the old one does, move the whole tree across (account subfolders and
+ * all). Only runs for the default location — an explicit `GEINS_SYNAPSE_DIR`/`GEINS_CONFIG_DIR`
+ * override is assumed to manage its own directory.
+ */
+async function migrateSynapseRoot(): Promise<void> {
+  if (rootMigrationDone) return;
+  rootMigrationDone = true;
+  if (process.env.GEINS_SYNAPSE_DIR || process.env.GEINS_CONFIG_DIR) return;
+
+  const newRoot = baseDir();
+  if (await fileExists(newRoot)) return;
+
+  const oldRoot = join(homedir(), '.config', 'geins', 'memory');
+  if (!(await fileExists(oldRoot))) return;
+
+  try {
+    await mkdir(dirname(newRoot), { recursive: true });
+    await rename(oldRoot, newRoot);
+  } catch { /* cross-device or permission — leave the old tree, a fresh root is created below */ }
+}
+
 async function migrateLegacyFiles(): Promise<void> {
   if (migrationDone || !currentAccountKey) return;
   migrationDone = true;
@@ -120,6 +152,7 @@ async function migrateLegacyFiles(): Promise<void> {
 }
 
 export async function ensureMemoryDirs(): Promise<void> {
+  await migrateSynapseRoot();
   const paths = getPaths();
   await mkdir(paths.sessionsDir, { recursive: true });
   await migrateLegacyFiles();

@@ -80,10 +80,10 @@ import {
 import { applyMemoryAccount, recordInteraction } from './memory/index.ts';
 import { memoryAdd, memoryList, memoryClear, exportMemory } from './commands/memory.ts';
 import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson, firstUserMessage } from './commands/sessions.ts';
-import { chat, getCopilotConfig, clearConversationHistory } from './commands/copilot.ts';
+import { chat, getCopilotConfig, clearConversationHistory, getMemoryEnabled, setMemoryEnabled } from './commands/copilot.ts';
 import { outputJson } from './output/format.ts';
 import { setBaseTitle } from './output/title.ts';
-import { PRODUCT_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP } from './commands/help-text.ts';
+import { PRODUCT_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP } from './commands/help-text.ts';
 
 const VERSION = '0.1.0';
 
@@ -154,6 +154,24 @@ async function launchTui(resume?: { open: boolean; id?: string }): Promise<void>
 
   const app = render(React.createElement(App, { version: VERSION, resume }), {
     exitOnCtrlC: false,
+  });
+
+  // Clean repaint on terminal WIDTH change. The whole TUI is one inline Ink frame; when the width
+  // changes the terminal reflows the on-screen text, but Ink erases the previous frame by moving the
+  // cursor up a fixed number of lines — after a reflow those lines no longer line up, so stale rows
+  // (ghost box borders, duplicated headers) are left behind. We clear the VISIBLE screen first, then
+  // Ink's own resize render (which always differs at a new width) repaints onto a clean canvas.
+  // `prependListener` runs this BEFORE Ink's resize handler (registered during render()).
+  // NB: erase the screen only (`2J`) — do NOT use `3J`, which wipes the scrollback buffer and would
+  // destroy the user's scroll-back history on every resize. Width-only: a pure height change doesn't
+  // reflow, and clearing then would risk a blank frame if Ink dedupes unchanged output, so we skip it.
+  const stdout = process.stdout;
+  let lastColumns = stdout.columns;
+  stdout.prependListener('resize', () => {
+    if (stdout.columns !== lastColumns) {
+      stdout.write('\x1b[2J\x1b[H');
+    }
+    lastColumns = stdout.columns;
   });
 
   await app.waitUntilExit();
@@ -265,6 +283,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     else if (commandName === 'account') console.log(ACCOUNT_HELP);
     else if (commandName === 'merchant') console.log(MERCHANT_HELP);
     else if (commandName === 'memory') console.log(MEMORY_HELP);
+    else if (commandName === 'apikey') console.log(APIKEY_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -365,8 +384,19 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           case 'clear':
             await memoryClear();
             break;
+          case 'on':
+            await setMemoryEnabled(true);
+            console.log('✓ Copilot memory enabled — facts are recalled into the prompt and persisted.');
+            break;
+          case 'off':
+            await setMemoryEnabled(false);
+            console.log('✓ Copilot memory disabled — nothing is recalled or persisted (stored memory is kept).');
+            break;
+          case 'status':
+            console.log(`Copilot memory is ${(await getMemoryEnabled()) ? 'on' : 'off'}.`);
+            break;
           default:
-            console.error(`Unknown subcommand: memory ${sub}. Use: add | list | export | clear`);
+            console.error(`Unknown subcommand: memory ${sub}. Use: add | list | export | clear | on | off | status`);
             process.exit(1);
         }
         break;
@@ -569,6 +599,10 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         }
 
         switch (sub) {
+          case 'help': {
+            console.log(APIKEY_HELP);
+            break;
+          }
           case 'set': {
             const credentials: ApiCredentials = {
               username: flag('--username') ?? process.env['GEINS_API_USERNAME'] ?? '',
@@ -646,7 +680,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           }
           default:
             console.error(`Unknown subcommand: apikey ${sub}`);
-            console.error('Subcommands: set, list, use <name>, remove <name>, clear');
+            console.error('Subcommands: set, list, use <name>, remove <name>, clear, help');
             process.exit(1);
         }
         break;
@@ -1395,13 +1429,15 @@ async function runDirect(rawArgs: string[]): Promise<void> {
             }
             if (action === 'create' || action === 'add') {
               const names = parseLoc('--name');
-              if (!names) { console.error('Usage: geins product categories create --name <code>:<text> [--name ...] [--parent <id>] [--desc <code>:<text>] [--hidden] [--inactive]'); process.exit(1); }
+              if (!names) { console.error('Usage: geins product categories create --name <code>:<text> [--name ...] [--parent <id>] [--desc <code>:<text>] [--hidden] [--active|--inactive]'); process.exit(1); }
               const input: CategoryWrite = {
                 Names: names,
                 ParentCategoryId: numFlag('--parent'),
                 Descriptions: parseLoc('--desc'),
                 Hidden: subArgs.includes('--hidden') ? true : undefined,
-                Active: subArgs.includes('--inactive') ? false : undefined,
+                // The API defaults a new category to INACTIVE when Active is omitted, which makes it
+                // unusable (product assignments read back empty). Default to active unless --inactive.
+                Active: subArgs.includes('--inactive') ? false : true,
               };
               const cat = await createCategory(input);
               console.log(`✓ Created category ${cat.CategoryId}: ${categoryName(cat)}`);
@@ -1863,6 +1899,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
                 oncePerCustomer: subArgs.includes('--once-per-customer') ? true : undefined,
                 priority: numFlag('--priority'),
                 enabled: subArgs.includes('--disabled') ? false : subArgs.includes('--enabled') ? true : undefined,
+                onlyDiscountedProducts: subArgs.includes('--only-discounted') ? true : undefined,
               });
             } else {
               console.error("Usage: geins campaign create --promocode <CODE> --market <id> (--percentage <n> | --amount <CUR>:<n>) [--title <t> --lang <code>] [--from <iso>] [--to <iso>] [--usage-limit <n>] [--once-per-customer] [--priority <n>] [--enabled|--disabled]\n       geins campaign create [--file <path> | --body '<json>' | stdin]");

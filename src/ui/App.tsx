@@ -21,12 +21,12 @@ import { setWorking } from '../output/title.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request, resetSessionCache } from '../api/client.ts';
-import { getApiUrl } from '../config/env.ts';
+import { getApiUrl, getLogo, getLogoPrefix, getLogoSuffix, getName } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
 import { ThinkingIndicator } from './ThinkingIndicator.tsx';
-import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, collectAttachedFiles, buildAttachmentSection, type StreamEvent } from '../commands/copilot.ts';
+import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, collectAttachedFiles, buildAttachmentSection, getMemoryEnabled, setMemoryEnabled, type StreamEvent } from '../commands/copilot.ts';
 import { CopilotActivity, type ActivityEntry } from './CopilotActivity.tsx';
 import {
   startSession,
@@ -415,6 +415,11 @@ export function App({ version = VERSION }: { version?: string }) {
       appState.addToChat(
         <Text key={`msg-${appState.getNextKey()}`} bold>{`❯ ${trimmed}`}</Text>,
       );
+      // Show the working indicator immediately — BEFORE the async attachment/config prep below —
+      // so there's no dead air between the user hitting enter and visible activity.
+      appState.setLiveComponent(
+        <ThinkingIndicator key="copilot-thinking" />,
+      );
       // A dropped file arrives as an absolute path in the message. Read a preview and
       // prepend it as context so the copilot can use the file to find/update products.
       const attachments = await collectAttachedFiles(trimmed);
@@ -427,9 +432,6 @@ export function App({ version = VERSION }: { version?: string }) {
       const providerLabel = copilotCfg
         ? copilotCfg.model ? `${copilotCfg.command} · ${copilotCfg.model}` : copilotCfg.command
         : 'copilot';
-      appState.setLiveComponent(
-        <ThinkingIndicator key="copilot-thinking" />,
-      );
       try {
         let streamBuffer = '';
         const activityLog: ActivityEntry[] = [];
@@ -485,7 +487,6 @@ export function App({ version = VERSION }: { version?: string }) {
             renderActivity();
           }
         }, handleEvent);
-        appState.setLiveComponent(null);
         const hasThinking = /<think>[\s\S]*?<\/think>/.test(rawBuffer);
         const cleaned = rawBuffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         if (hasThinking) {
@@ -493,10 +494,15 @@ export function App({ version = VERSION }: { version?: string }) {
         }
         const looksGarbled = /(<\|[a-z_]+\|>|<\|im_|<\|endoftext)/.test(cleaned);
         if (looksGarbled) {
+          appState.setLiveComponent(null);
           logError(`  The selected model doesn't support this task. Try a more capable model or switch provider with /copilot set.`);
         } else if (cleaned) {
           const finalEntries = activityLog.map(e => ({ ...e, done: true }));
+          // Keep the activity (with its spinner) on screen while we compute context usage — that
+          // call rebuilds the prompt and can take a beat. Clearing it first leaves a blank,
+          // frozen-looking gap. Only swap the live view for the committed card once we're ready.
           const ctx = await getContextUsageAsync();
+          appState.setLiveComponent(null);
           appState.addToChat(
             <CopilotActivity
               key={`msg-${appState.getNextKey()}`}
@@ -518,6 +524,10 @@ export function App({ version = VERSION }: { version?: string }) {
             const commands = extractGeinsCommands(pending);
             if (commands.length === 0) break;
 
+            // Collect this round's results so the follow-up prompt is SELF-CONTAINED: with native
+            // session resume the full history isn't replayed, so we can't say "the results are above"
+            // and rely on it — we embed them in the prompt itself (works for replay CLIs too).
+            const roundResults: string[] = [];
             for (const cmd of commands) {
               appState.setLiveComponent(
                 <Box key="cmd-spinner" gap={1} paddingX={1}>
@@ -526,13 +536,19 @@ export function App({ version = VERSION }: { version?: string }) {
                 </Box>,
               );
               const result = await executeGeinsCommand(cmd);
-              appState.setLiveComponent(null);
               if (controller.signal.aborted) throw new Error('cancelled');
+              // Keep the command spinner up through the result save, then swap to the committed card —
+              // no blank gap while addToolResult writes history.
               await addToolResult(cmd, result.output);
+              const capped = result.output.length > 4000
+                ? `${result.output.slice(0, 4000)}\n…[truncated; full result in the output folder]`
+                : result.output;
+              roundResults.push(`$ ${cmd}\n${capped}`);
               // Collapse long outputs to a one-line summary (the model still gets the
               // full result, and it's written to the output folder). Short ones show.
               const lines = result.output ? result.output.split('\n').length : 0;
               const collapse = result.output.length > 800 || lines > 12;
+              appState.setLiveComponent(null);
               appState.addToChat(
                 <Box key={`cmd-${appState.getNextKey()}`} flexDirection="column">
                   <Text dimColor>{`  ⟳ ${cmd}`}</Text>
@@ -559,9 +575,10 @@ export function App({ version = VERSION }: { version?: string }) {
             };
             renderFollowup();
 
+            const resultsBlock = roundResults.join('\n\n');
             const followupPrompt = lastRound
-              ? `The command results are above. Do NOT output more commands now — give your final answer to my original question and summarize what you found.\n\nMy original question was: ${trimmed}`
-              : `The command results are above. If you need to run more commands, output them in a bash block. Otherwise, answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`;
+              ? `I ran the commands you asked for. Results:\n\n${resultsBlock}\n\nDo NOT output more commands now — give your final answer to my original question and summarize what you found.\n\nMy original question was: ${trimmed}`
+              : `I ran the commands you asked for. Results:\n\n${resultsBlock}\n\nIf you need to run more commands, output them in a bash block. Otherwise, answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`;
 
             const followupRaw = await chatStream(
               followupPrompt,
@@ -588,14 +605,16 @@ export function App({ version = VERSION }: { version?: string }) {
                 }
               },
             );
-            appState.setLiveComponent(null);
             // Keep bash blocks here — `pending` is scanned for the next round's commands.
             const followupCleaned = followupRaw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             // Only commit a visible card if there's prose/tool activity (a bash-only
             // round produces no display text and shouldn't leave an empty card).
             if (followupLog.length > 0) {
               const finalFollowup = followupLog.map(e => ({ ...e, done: true }));
+              // Keep the working indicator up while context usage is computed (see note above),
+              // then swap it for the committed card — avoids a blank gap mid-turn.
               const ctx2 = await getContextUsageAsync();
+              appState.setLiveComponent(null);
               appState.addToChat(
                 <CopilotActivity
                   key={`msg-${appState.getNextKey()}`}
@@ -605,11 +624,17 @@ export function App({ version = VERSION }: { version?: string }) {
                 />,
               );
               lastAnswer = followupCleaned;
+            } else {
+              // Bash-only round (no prose/tools to show) — clear the indicator before the next round.
+              appState.setLiveComponent(null);
             }
             pending = lastRound ? '' : followupCleaned;
           }
           // Persist the turn (original question + a one-line answer summary) for /memory.
           await recordInteraction(trimmed, lastAnswer);
+        } else {
+          // No assistant text and not garbled — still clear the working indicator so it doesn't linger.
+          appState.setLiveComponent(null);
         }
       } catch (err) {
         appState.setLiveComponent(null);
@@ -627,6 +652,18 @@ export function App({ version = VERSION }: { version?: string }) {
     const args = parts.slice(1);
 
     logDim(`  > ${trimmed}`);
+
+    // Generic "working" indicator so every command gives immediate feedback while it talks to the
+    // API — without this, commands that don't set their own spinner (e.g. /account locales) sit
+    // silent until output appears. Set before the switch; commands that show a more specific spinner
+    // override it, synchronous commands clear it via the finally before React ever paints it (no
+    // flash), and the outer finally guarantees it's gone once the command returns.
+    appState.setLiveComponent(
+      <Box key="cmd-working" gap={1} paddingX={1}>
+        <Spinner type="dots" />
+        <Text dimColor>{`Running ${trimmed}…`}</Text>
+      </Box>,
+    );
 
     try {
       switch (command) {
@@ -2346,6 +2383,15 @@ export function App({ version = VERSION }: { version?: string }) {
             logSuccess(`  ✓ Exported memory to ${file}`);
             break;
           }
+          if (sub === 'on' || sub === 'off') {
+            await setMemoryEnabled(sub === 'on');
+            logSuccess(`  ✓ Copilot memory ${sub === 'on' ? 'enabled' : 'disabled'}`);
+            break;
+          }
+          if (sub === 'status') {
+            logText(`  Copilot memory is ${(await getMemoryEnabled()) ? 'on' : 'off'}`);
+            break;
+          }
           const kb = await loadKnowledge();
           if (kb.entities.length === 0 && kb.patterns.length === 0 && Object.keys(kb.preferences).length === 0 && kb.interactions.length === 0) {
             logDim('  No learned knowledge yet');
@@ -2407,6 +2453,8 @@ export function App({ version = VERSION }: { version?: string }) {
       setWorking(false);
       setActiveSignal(undefined);
       abortRef.current = null;
+      // Clear any lingering working/live indicator once the command (or copilot turn) is done.
+      appState.setLiveComponent(null);
     }
   }, [appState, logText, logDim, logSuccess, logError, exit]);
 
@@ -2419,6 +2467,10 @@ export function App({ version = VERSION }: { version?: string }) {
         accountName={appState.status.accountName || undefined}
         apiAccount={appState.status.apiAccount || undefined}
         authState={appState.status.authState}
+        logo={getLogo()}
+        prefix={getLogoPrefix()}
+        suffix={getLogoSuffix()}
+        name={getName()}
       />
     ),
     [version, appState.status.user, appState.status.account, appState.status.accountName, appState.status.apiAccount, appState.status.authState],

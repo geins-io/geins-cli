@@ -27,6 +27,9 @@ export interface CopilotOption {
   testCmd: string[];
   supportsModels?: boolean;
   supportsStreamJson?: boolean;
+  /** The CLI keeps its own resumable session (e.g. `claude --resume <id>`), so we send only the
+   *  new message each turn instead of replaying the whole system+history prompt. */
+  supportsResume?: boolean;
   contextWindow: number;
   buildCmd: (model?: string) => string[];
   useStdin: boolean;
@@ -46,6 +49,7 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['claude', '--version'],
     contextWindow: 200000,
     supportsStreamJson: true,
+    supportsResume: true,
     useStdin: true,
     buildCmd: () => ['claude', '-p', '--output-format', 'stream-json', '--verbose'],
   },
@@ -89,7 +93,16 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * Native session id for resume-capable agent CLIs (claude). Held for the life of the
+ * conversation so every turn continues the SAME agent session — tool results and prior context
+ * live on the agent's side rather than being replayed into the prompt each turn. Cleared whenever
+ * the conversation is reset (new chat, account switch), which restarts with a fresh session.
+ */
+let resumeSessionId: string | undefined;
+
 export function clearConversationHistory(): void {
+  resumeSessionId = undefined;
   clearHistory();
 }
 
@@ -132,6 +145,15 @@ const SYSTEM_CONTEXT = [
   '  the preview is only the first lines. Infer the columns/shape from the preview first.',
   '- If the user dropped a file with NO clear instruction (or an ambiguous one), do NOT guess: summarize',
   '  what the file contains (columns, row count, a sample) and ask what they want to do with it.',
+  '- IMAGES (png/jpg/webp/…): VIEW them with your Read tool — do not treat them as opaque binaries.',
+  '  Read the absolute path and act on what you see. In particular:',
+  '  · A screenshot of the Geins admin "API User" page (fields: Username, Management API Password,',
+  '    Management API Key, Merchant API Key — the page warns the secrets are shown only once) means',
+  '    "add this account as an apikey profile". Read the four values verbatim off the image and run',
+  '    `geins apikey set --username <u> --mgmt-key <Management API Key> --mgmt-password <Management API',
+  '    Password> --merchant-key <Merchant API Key>` — that one command validates and activates it.',
+  '    Run `geins apikey help` if unsure of the flags. Do this WITHOUT asking for confirmation (the user',
+  '    dropped the screenshot precisely to add it); after it saves, report the new active profile name.',
   '- The intent can be anything. Common ones, as a guide (not a fixed menu):',
   '    · find / match — map rows to existing products by the strongest key available: article number',
   '      (`geins product list --article <n> --json`), id (`geins product get <id> --json`), then name/brand;',
@@ -159,6 +181,10 @@ const SYSTEM_CONTEXT = [
   '  (after the user confirms) when no existing one fits.',
   '',
   'INTENT MAPPING — map user intent to Geins operations:',
+  '  "who am I / current user / which account / account key / am I logged in" → geins whoami',
+  '    (the authenticated user + active account — the source of truth for user and account identity)',
+  '  "add an api key / add account / connect this account" or a dropped "API User" screenshot →',
+  '    geins apikey set --username <u> --mgmt-key <k> --mgmt-password <p> --merchant-key <k>',
   '  "create a workflow" → geins workflow create',
   '  "send email / notify / alert as a workflow" → workflow with email action node',
   '  "every morning / schedule / cron as a workflow" → scheduled trigger workflow',
@@ -189,10 +215,23 @@ const SYSTEM_CONTEXT = [
   '- Global variables in workflows: {{vars.variableName}}',
   '- Keep responses concise. Act, don\'t explain.',
   '- Write any files you create into the output folder (your working directory) — see FILE OUTPUT.',
-  '- MEMORY: when you learn something durable about this account — a project fact, an API quirk, a naming convention, or a user preference — persist it so future turns remember. Two equivalent ways:',
-  '    • inline tag (preferred, one per line, kept out of the visible reply): [MEMORY]category:the fact[/MEMORY]',
-  '    • or run: geins memory add <category> "the fact"',
-  '  category is one of: project, workflow, api, preference, pattern. Record proactively but only durable facts — not one-off values or chit-chat. Example: [MEMORY]preference:user wants compact output with no IDs[/MEMORY]',
+].join('\n');
+
+// Appended to the system prompt only when memory is enabled (`geins memory on`, the default).
+// When the user runs `geins memory off` these instructions are dropped, recalled knowledge is not
+// injected, and the copilot's [MEMORY] tags are not persisted — see getMemoryEnabled().
+const MEMORY_INSTRUCTIONS = [
+  'MEMORY: this app keeps its persistent memory in the global Synapse folder at `~/.synapse` (overridable',
+  'via $GEINS_SYNAPSE_DIR). That folder is THE single source of truth for everything you remember — it is',
+  'shared across ALL model backends (Claude, Ollama, etc.) and per-account subfolders live inside it. It is',
+  'the same store the `/memory` (geins memory) command reads and writes. ALWAYS treat it as your memory:',
+  'rely on what has been recalled into this prompt from it, and persist anything new there. Do NOT invent a',
+  'separate memory location (e.g. a backend\'s own ~/.claude store) — always read from and store to Synapse.',
+  'When you learn something durable about this account — a project fact, an API quirk, a naming convention,',
+  'or a user preference — persist it so future turns remember. Two equivalent ways:',
+  '  • inline tag (preferred, one per line, kept out of the visible reply): [MEMORY]category:the fact[/MEMORY]',
+  '  • or run: geins memory add <category> "the fact"',
+  'category is one of: project, workflow, api, preference, pattern. Record proactively but only durable facts — not one-off values or chit-chat. Example: [MEMORY]preference:user wants compact output with no IDs[/MEMORY]',
 ].join('\n');
 
 function getMaxPromptTokens(option?: CopilotOption): number {
@@ -202,7 +241,9 @@ function getMaxPromptTokens(option?: CopilotOption): number {
 
 async function buildFullPrompt(userMessage: string, option?: CopilotOption): Promise<string> {
   const maxTokens = getMaxPromptTokens(option);
-  const systemTokens = estimateTokens(SYSTEM_CONTEXT);
+  const memoryOn = await getMemoryEnabled();
+  const systemContext = memoryOn ? `${SYSTEM_CONTEXT}\n${MEMORY_INSTRUCTIONS}` : SYSTEM_CONTEXT;
+  const systemTokens = estimateTokens(systemContext);
   const userMsgText = userMessage ? `User: ${userMessage}` : '';
   const userMsgTokens = estimateTokens(userMsgText);
 
@@ -233,8 +274,8 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
     ? `Output folder: ${effectiveDir}`
     : `Output folder: ${effectiveDir} (the directory geins was launched from; set a fixed one with \`geins output <dir>\`)`;
 
-  const parts = [SYSTEM_CONTEXT, outputSection];
-  if (knowledgeSection) parts.push(knowledgeSection);
+  const parts = [systemContext, outputSection];
+  if (memoryOn && knowledgeSection) parts.push(knowledgeSection);
   if (manifestSection) parts.push(manifestSection);
   if (apiRefSection) parts.push(apiRefSection);
   if (contextSection) parts.push(contextSection);
@@ -283,6 +324,19 @@ export async function saveCopilotChoice(option: CopilotOption, model?: string): 
 export async function getCopilotConfig(): Promise<CopilotConfig | null> {
   const config = await loadConfig();
   return config.copilot ?? null;
+}
+
+/** Whether the copilot uses persistent memory. Defaults to ON (only an explicit `false` disables it). */
+export async function getMemoryEnabled(): Promise<boolean> {
+  const config = await loadConfig();
+  return config.memoryEnabled !== false;
+}
+
+/** Toggle copilot memory (`geins memory on|off`). */
+export async function setMemoryEnabled(on: boolean): Promise<void> {
+  const config = await loadConfig();
+  config.memoryEnabled = on;
+  await saveConfig(config);
 }
 
 export function getCopilotOption(cli: string): CopilotOption | undefined {
@@ -464,96 +518,130 @@ export async function chatStream(
 
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
   const isStreamJson = option.supportsStreamJson;
-  // Always include conversation history: each copilot invocation is a stateless
-  // one-shot spawn (e.g. `claude -p`), so prior turns and tool results only reach
-  // the model if they're in the prompt. Omitting them broke multi-step flows where
-  // a follow-up references "the command results" / "my original question".
-  const fullPrompt = await buildFullPrompt(prompt, option);
-  const cmd = option.buildCmd(config.model);
+  const canResume = !!option.supportsResume && isStreamJson;
 
-  const proc = Bun.spawn(cmd, {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    stdin: 'pipe',
-    ...(await copilotProcOptions()),
-  });
+  // One spawn+stream attempt. When `resumeId` is set, the agent CLI continues its own session
+  // (prior turns and tool results stay on its side), so we send ONLY the new message. Otherwise
+  // we replay the full system+history prompt — the only way stateless CLIs (e.g. `claude -p` with
+  // no session, codex, gemini, ollama) see prior context.
+  const attempt = async (
+    resumeId: string | undefined,
+  ): Promise<{ buffer: string; sessionId?: string; exitCode: number; readStderr: () => Promise<string> }> => {
+    const fullPrompt = resumeId ? prompt : await buildFullPrompt(prompt, option);
+    const cmd = option.buildCmd(config.model);
+    if (resumeId) cmd.push('--resume', resumeId);
 
-  proc.stdin.write(fullPrompt);
-  proc.stdin.end();
+    const proc = Bun.spawn(cmd, {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'pipe',
+      ...(await copilotProcOptions()),
+    });
 
-  const reader = proc.stdout.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+    proc.stdin.write(fullPrompt);
+    proc.stdin.end();
 
-  // Ctrl-C handling: cancel the reader so the read loop ends *immediately* — we can't rely
-  // on the copilot CLI dying promptly on a kill signal, and a blocked reader.read() would
-  // otherwise hang the whole turn. Then terminate the process.
-  const signal = getActiveSignal();
-  const onAbort = () => {
-    reader.cancel().catch(() => { /* already closed */ });
-    try { proc.kill(); } catch { /* already gone */ }
-  };
-  if (signal) {
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-  }
+    const reader = proc.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let sessionId: string | undefined;
 
-  if (isStreamJson) {
-    let lineBuf = '';
-    let lastText = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      lineBuf += decoder.decode(value, { stream: true });
-      const lines = lineBuf.split('\n');
-      lineBuf = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const raw = parseStreamJsonLine(line);
-        if (!raw) continue;
-        if (raw.type === 'text' && raw.text) {
+    // The first stream-json line is the `init` system event carrying the session_id; grab it so a
+    // resume-capable CLI can continue this exact session next turn.
+    const captureSession = (line: string) => {
+      if (sessionId) return;
+      try {
+        const ev = JSON.parse(line);
+        if (typeof ev.session_id === 'string' && ev.session_id) sessionId = ev.session_id;
+      } catch { /* not JSON / no session */ }
+    };
+
+    // Ctrl-C handling: cancel the reader so the read loop ends *immediately* — we can't rely
+    // on the copilot CLI dying promptly on a kill signal, and a blocked reader.read() would
+    // otherwise hang the whole turn. Then terminate the process.
+    const signal = getActiveSignal();
+    const onAbort = () => {
+      reader.cancel().catch(() => { /* already closed */ });
+      try { proc.kill(); } catch { /* already gone */ }
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    if (isStreamJson) {
+      let lineBuf = '';
+      let lastText = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuf += decoder.decode(value, { stream: true });
+        const lines = lineBuf.split('\n');
+        lineBuf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          captureSession(line);
+          const raw = parseStreamJsonLine(line);
+          if (!raw) continue;
+          if (raw.type === 'text' && raw.text) {
+            lastText = raw.text;
+            onChunk(raw.text);
+            onEvent?.({ kind: 'text', text: raw.text });
+          } else if (raw.type === 'tool_use' && raw.toolName) {
+            const label = formatToolLabel(raw.toolName, raw.toolInput ?? {});
+            onEvent?.({ kind: 'tool_start', toolName: raw.toolName, label });
+          } else if (raw.type === 'tool_result') {
+            onEvent?.({ kind: 'tool_end' });
+          }
+        }
+      }
+      if (lineBuf.trim()) {
+        captureSession(lineBuf);
+        const raw = parseStreamJsonLine(lineBuf);
+        if (raw?.type === 'text' && raw.text) {
           lastText = raw.text;
           onChunk(raw.text);
           onEvent?.({ kind: 'text', text: raw.text });
-        } else if (raw.type === 'tool_use' && raw.toolName) {
-          const label = formatToolLabel(raw.toolName, raw.toolInput ?? {});
-          onEvent?.({ kind: 'tool_start', toolName: raw.toolName, label });
-        } else if (raw.type === 'tool_result') {
-          onEvent?.({ kind: 'tool_end' });
         }
       }
-    }
-    if (lineBuf.trim()) {
-      const raw = parseStreamJsonLine(lineBuf);
-      if (raw?.type === 'text' && raw.text) {
-        lastText = raw.text;
-        onChunk(raw.text);
-        onEvent?.({ kind: 'text', text: raw.text });
+      buffer = lastText;
+    } else {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        onChunk(chunk);
       }
     }
-    buffer = lastText;
-  } else {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      buffer += chunk;
-      onChunk(chunk);
-    }
+
+    const exitCode = await proc.exited;
+    return { buffer, sessionId, exitCode, readStderr: () => new Response(proc.stderr).text() };
+  };
+
+  let res = await attempt(canResume ? resumeSessionId : undefined);
+  // A resume can fail if the agent dropped/expired the session. Retry once fresh (full context,
+  // no resume) so the turn still succeeds, then let the new session id be captured below. A failed
+  // resume errors before emitting assistant content, so this does not duplicate visible output.
+  if (res.exitCode !== 0 && !getActiveSignal()?.aborted && canResume && resumeSessionId) {
+    resumeSessionId = undefined;
+    res = await attempt(undefined);
   }
 
-  const exitCode = await proc.exited;
   // Cancelled by the user (Ctrl-C) — surface it as an abort, not a process-error.
-  if (signal?.aborted) throw new Error('Copilot cancelled.');
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);
+  if (getActiveSignal()?.aborted) throw new Error('Copilot cancelled.');
+  if (res.exitCode !== 0) {
+    const stderr = await res.readStderr();
+    throw new Error(`Copilot exited with code ${res.exitCode}: ${stderr.trim()}`);
   }
 
-  const cleaned = buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  // Remember the session so the next turn resumes it instead of replaying the whole prompt.
+  if (canResume && res.sessionId) resumeSessionId = res.sessionId;
+
+  const cleaned = res.buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
   await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
   await processMemoryBlocks(cleaned);
-  return buffer;
+  return res.buffer;
 }
 
 // ── Dropped-file attachments ─────────────────────────────────────────────────
@@ -564,6 +652,8 @@ export async function chatStream(
 
 const MAX_PREVIEW_BYTES = 8000;
 const MAX_PREVIEW_LINES = 60;
+/** Viewable raster/vector image extensions — these get a "view it" hint, not "opaque binary". */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|heic|svg)$/i;
 
 export interface AttachedFile {
   path: string;
@@ -646,7 +736,9 @@ export function buildAttachmentSection(files: AttachedFile[]): string {
   for (const f of files) {
     const kb = (f.bytes / 1024).toFixed(1);
     parts.push('', `File: ${f.path}  (${kb} KB)`);
-    if (f.binary) {
+    if (IMAGE_EXT_RE.test(f.path)) {
+      parts.push('[image — VIEW it with your Read tool at the path above, then act on what it shows]');
+    } else if (f.binary) {
       parts.push('[binary file — read it with the appropriate tool]');
     } else {
       parts.push(`Preview (first ${f.previewLines} lines${f.truncated ? ', truncated — read the full file from the path above' : ''}):`, '```', f.preview, '```');
@@ -744,6 +836,7 @@ export async function addToolResult(command: string, output: string): Promise<vo
 }
 
 async function processMemoryBlocks(text: string): Promise<void> {
+  if (!(await getMemoryEnabled())) return;
   const blocks = extractMemoryBlocks(text);
   for (const block of blocks) {
     // Preferences are key/value-ish; store them in the preferences map (mirrors the v1

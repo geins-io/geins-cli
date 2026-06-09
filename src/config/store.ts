@@ -23,6 +23,8 @@ export interface GeinsConfig {
   outputDir?: string;
   theme?: 'dark' | 'light';
   copilot?: CopilotConfig;
+  /** Whether the copilot uses persistent memory (recall + persist + prompt instructions). Default on. */
+  memoryEnabled?: boolean;
 }
 
 export interface StoredSession {

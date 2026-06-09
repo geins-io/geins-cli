@@ -94,14 +94,45 @@ export interface ResponseRecord {
   method: string;
   path: string;
   status: number;
+  /** URL query params sent with the request, if any. Rendered onto the logged path. */
+  query?: Record<string, unknown>;
+  /** Request body sent to the endpoint, if any (object, or a pre-stringified payload). */
+  body?: unknown;
   data?: unknown;
   error?: string;
 }
 
+/** Render a query object as a `?a=1&b=2` string (skipping null/undefined); '' when empty. */
+function queryString(query?: Record<string, unknown>): string {
+  if (!query) return '';
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(query)) {
+    if (v === undefined || v === null) continue;
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+  }
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+const MAX_BODY_LOG = 2000;
+
+/** Compact a request body to a single line for the log, truncating very large payloads. */
+function compactBody(body: unknown): string {
+  if (body === undefined || body === null) return '';
+  let s: string;
+  if (typeof body === 'string') s = body;
+  else {
+    try { s = JSON.stringify(body); } catch { s = String(body); }
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  return s.length > MAX_BODY_LOG ? `${s.slice(0, MAX_BODY_LOG)}… (${s.length} chars)` : s;
+}
+
 /**
  * Best-effort: write a response body to a timestamped JSON file and append a line
- * to requests.log. A no-op that never throws when no output dir is configured.
- * Returns the dump file path, or null.
+ * to requests.log. The log line records the full request — method, path, query params,
+ * and the body sent — alongside the response status. A no-op that never throws when no
+ * output dir is configured. Returns the dump file path, or null.
  */
 export async function recordResponse(record: ResponseRecord): Promise<string | null> {
   try {
@@ -118,9 +149,13 @@ export async function recordResponse(record: ResponseRecord): Promise<string | n
     }
 
     const stamp = new Date().toISOString();
+    // Request half: METHOD path?query [body {...}] — describes what was sent.
+    const bodyStr = compactBody(record.body);
+    const reqPart = `${record.method} ${record.path}${queryString(record.query)}${bodyStr ? ` body ${bodyStr}` : ''}`;
+    // Response half: → status (ERROR …) / saved file.
     const line = record.error
-      ? `[${stamp}] ${record.method} ${record.path} → ${record.status} ERROR ${record.error.replace(/\s+/g, ' ').slice(0, 200)}`
-      : `[${stamp}] ${record.method} ${record.path} → ${record.status}${file ? ` saved ${file.split('/').pop()}` : ''}`;
+      ? `[${stamp}] ${reqPart} → ${record.status} ERROR ${record.error.replace(/\s+/g, ' ').slice(0, 200)}`
+      : `[${stamp}] ${reqPart} → ${record.status}${file ? ` saved ${file.split('/').pop()}` : ''}`;
     await appendFile(join(dir, 'requests.log'), line + '\n');
 
     return file;

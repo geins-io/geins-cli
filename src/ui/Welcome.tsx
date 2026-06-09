@@ -1,40 +1,6 @@
 import React from 'react';
 import { Box, Text, useWindowSize } from 'ink';
-
-const LOGO_FULL = [
-'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
-' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
-' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
-' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
-' ╚██████╔╝███████╗██║██║ ╚████║███████║',
-'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
-];
-const LOGO_COMPACT = [
-'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
-' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
-' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
-' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
-' ╚██████╔╝███████╗██║██║ ╚████║███████║',
-'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
-  ];
-
-const PROMPT = [
-'██╗     ',
-'╚██╗    ',
-' ╚██╗   ',
-' ██╔╝   ',
-'██╔╝    ',
-'╚═╝ ▁▁▁ ',
-];
-
-const SUFFIX = [
-'    ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗███████╗',
-'   ██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝',
-'   ███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗█████╗  ',
-'   ╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║██╔══╝  ',
-'   ███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗',
-'    ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝',
-];
+import { LOGO_FULL, LOGO_COMPACT, PROMPT, SUFFIX, LITIUM_LOGO, LITIUM_PROMPT, LITIUM_SUFFIX, type LogoVariant } from './logos';
 
 // Horizontal (x-axis) gradient stops: cyan → blue → green, left → right.
 const GRADIENT = ['#00e5ff', '#3b82f6', '#22c55e'];
@@ -68,6 +34,10 @@ interface WelcomeProps {
   accountName?: string;
   apiAccount?: string;
   authState?: AuthState;
+  logo?: LogoVariant;
+  prefix?: boolean;
+  suffix?: boolean;
+  name?: string;
 }
 
 // Login states that warrant a visible prompt to (re-)authenticate.
@@ -76,11 +46,35 @@ const AUTH_NOTICE: Partial<Record<AuthState, string>> = {
   expired: 'Your session has expired. Run /login to re-authenticate.',
 };
 
-export function Welcome({ version, user, account, accountName, apiAccount, authState }: WelcomeProps) {
-  const { columns } = useWindowSize();
-  const logo = columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
+export function Welcome({ version, user, account, accountName, apiAccount, authState, logo = 'geins', prefix = true, suffix = true, name = 'Geins Synapse' }: WelcomeProps) {
+  const { columns, rows: windowRows } = useWindowSize();
 
-  const rows = logo.map((line, i) => `${PROMPT[i]}${line}${SUFFIX[i]}`);
+  // Degrade the banner by available height so the whole frame stays inside the viewport. A frame
+  // taller than the window scrolls off the top, and on resize Ink can only erase what it can still
+  // reach with the cursor — the rest is left behind as ghost borders / duplicated headers. Shed the
+  // intro box, then the hints, then the logo as the window shrinks. Each tier's measured height must
+  // clear `rows` with room for the input box, which shares the same Ink frame (~8 lines, matching the
+  // reserve in ChatHistory): full banner ≈30 lines, +logo+hints ≈16, logo only ≈12.
+  const h = windowRows ?? 24;
+  const showLogo = h >= 21;
+  const showHints = h >= 25;
+  const showIntroBox = h >= 39;
+
+  // Pick the wordmark and its matching flourishes, then optionally wrap with the prefix ("/" for geins,
+  // "_" for litium) and the suffix ("SYNAPSE" for geins, "TERMINAL" for litium).
+  const isLitium = logo === 'litium';
+  const base = isLitium ? LITIUM_LOGO : columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
+  const promptArt = isLitium ? LITIUM_PROMPT : PROMPT;
+  const suffixArt = isLitium ? LITIUM_SUFFIX : SUFFIX;
+
+  // Drop the suffix flourish ("SYNAPSE"/"AGENT") when the full banner — prefix + wordmark + suffix —
+  // would overflow the terminal; the outer Box adds paddingX={1} on each side (2 cols).
+  const artWidth = (art: string[]) => Math.max(...art.map((l) => [...l].length));
+  const prefixWidth = prefix ? artWidth(promptArt) : 0;
+  const fullWidth = prefixWidth + artWidth(base) + artWidth(suffixArt);
+  const showSuffix = suffix && fullWidth <= columns - 2;
+
+  const rows = base.map((line, i) => `${prefix ? promptArt[i] : ''}${line}${showSuffix ? suffixArt[i] : ''}`);
   const width = Math.max(...rows.map((r) => [...r].length));
 
   const authNotice = authState ? AUTH_NOTICE[authState] : undefined;
@@ -90,21 +84,25 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text> </Text>
-      {rows.map((row, i) => (
-        <Text key={i}>
-          {[...row].map((ch, col) => (
-            <Text key={col} color={colorAt(col / (width - 1))}>{ch}</Text>
+      {showLogo ? (
+        <>
+          <Text> </Text>
+          {rows.map((row, i) => (
+            <Text key={i}>
+              {[...row].map((ch, col) => (
+                <Text key={col} color={colorAt(col / (width - 1))}>{ch}</Text>
+              ))}
+            </Text>
           ))}
-        </Text>
-      ))}
-      <Text> </Text>
+          <Text> </Text>
+        </>
+      ) : null}
 
       <Text> </Text>
       <Box flexDirection="column" paddingX={1}>
         <Box gap={1}>
           <Text color="cyan" bold>✻</Text>
-          <Text bold>Geins CLI</Text>
+          <Text bold>{name}</Text>
           <Text dimColor>v{version}</Text>
           {user && !loggedOut ? (
             <>
@@ -126,25 +124,27 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
           ) : null}
         </Box>      
       </Box>
-      <Box
-        borderStyle="round"
-        borderColor="cyan"
-        flexDirection="column"        
-        marginTop={1}
-        paddingX={1}
-        paddingY={1}
-      >
-         <Text>👋 Hello World!</Text>
-         <Text> </Text>
-         <Text>Welcome to <Text bold color="cyan">Geins Synapse</Text> — Your gateway to agentic commerce at the speed of the command line.</Text>
-         <Text> </Text>
-        <Text>2026 is the year agents run the store. Synapse makes your catalog,</Text>
-        <Text>orders, and workflows agent-ready — structured, scriptable, and live.</Text>
-        <Text> </Text>
-        <Text>Type a command, hand it to <Text color="magenta">copilot</Text>, or go fully headless with your favorite agent framework.</Text>
-        <Text>Your commerce, on autopilot.</Text>
+      {showIntroBox ? (
+        <Box
+          borderStyle="round"
+          borderColor="cyan"
+          flexDirection="column"
+          marginTop={1}
+          paddingX={1}
+          paddingY={1}
+        >
+           <Text>👋 Hello World!</Text>
+           <Text> </Text>
+           <Text>Welcome to <Text bold color="cyan">{name}</Text> — Your gateway to agentic commerce at the speed of the command line.</Text>
+           <Text> </Text>
+          <Text>2026 is the year agents run the store. Synapse makes your catalog,</Text>
+          <Text>orders, and workflows agent-ready — structured, scriptable, and live.</Text>
+          <Text> </Text>
+          <Text>Type a command, hand it to <Text color="magenta">copilot</Text>, or go fully headless with your favorite agent framework.</Text>
+          <Text>Your commerce, on autopilot.</Text>
 
-      </Box>
+        </Box>
+      ) : null}
       {authNotice ? (
         <Box
           borderStyle="round"
@@ -158,13 +158,17 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
         </Box>
       ) : null}
       
-      <Box marginTop={1} flexDirection="column">        
-        <Text color="">ℹ Switch to <Text color="magenta">copilot</Text> mode with <Text color="magenta">/copilot</Text> or shift tab.</Text>
-      </Box>
+      {showHints ? (
+        <>
+          <Box marginTop={1} flexDirection="column">
+            <Text color="">ℹ Switch to <Text color="magenta">copilot</Text> mode with <Text color="magenta">/copilot</Text> or shift tab.</Text>
+          </Box>
 
-      <Box marginTop={1} >
-        <Text dimColor>Type <Text color="cyan">/help</Text> for commands, <Text color="cyan">/exit</Text> to quit</Text>
-      </Box>
+          <Box marginTop={1} >
+            <Text dimColor>Type <Text color="cyan">/help</Text> for commands, <Text color="cyan">/exit</Text> to quit</Text>
+          </Box>
+        </>
+      ) : null}
       <Text> </Text>
     </Box>
   );

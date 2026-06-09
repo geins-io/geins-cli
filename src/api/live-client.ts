@@ -94,13 +94,13 @@ export async function mgmtRequest<T = unknown>(
 
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, method, apiPath);
-    await recordResponse({ method, path: apiPath, status: res.status, error: err.body || err.message });
+    await recordResponse({ method, path: apiPath, query: options?.query, body: options?.body, status: res.status, error: err.body || err.message });
     throw err;
   }
 
   const text = await res.text();
   const data = (text ? JSON.parse(text) : undefined) as T;
-  await recordResponse({ method, path: apiPath, status: res.status, data });
+  await recordResponse({ method, path: apiPath, query: options?.query, body: options?.body, status: res.status, data });
   return data;
 }
 
@@ -143,15 +143,17 @@ export async function mgmtUpload<T = unknown>(
     signal: getActiveSignal(),
   });
 
+  // Binary payload — log a descriptor (type + size), not the raw bytes.
+  const bodyInfo = `<binary ${contentType}, ${body.length} bytes>`;
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, method, apiPath);
-    await recordResponse({ method, path: apiPath, status: res.status, error: err.body || err.message });
+    await recordResponse({ method, path: apiPath, query: options?.query, body: bodyInfo, status: res.status, error: err.body || err.message });
     throw err;
   }
 
   const text = await res.text();
   const data = (text ? JSON.parse(text) : undefined) as T;
-  await recordResponse({ method, path: apiPath, status: res.status, data });
+  await recordResponse({ method, path: apiPath, query: options?.query, body: bodyInfo, status: res.status, data });
   return data;
 }
 
@@ -178,19 +180,21 @@ export async function merchantQuery<T = unknown>(
     signal: getActiveSignal(),
   });
 
+  // Log variables first so the request params stay visible even when the long query is truncated.
+  const reqBody = { variables, query };
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, 'POST', '/graphql');
-    await recordResponse({ method: 'POST', path: '/graphql', status: res.status, error: err.body || err.message });
+    await recordResponse({ method: 'POST', path: '/graphql', body: reqBody, status: res.status, error: err.body || err.message });
     throw err;
   }
 
   const json = (await res.json()) as GraphQLResponse<T>;
   if (json.errors?.length) {
     const message = json.errors.map((e) => e.message).join('; ');
-    await recordResponse({ method: 'POST', path: '/graphql', status: 200, error: message });
+    await recordResponse({ method: 'POST', path: '/graphql', body: reqBody, status: 200, error: message });
     throw new ApiError(200, 'POST', '/graphql', message);
   }
-  await recordResponse({ method: 'POST', path: '/graphql', status: 200, data: json.data });
+  await recordResponse({ method: 'POST', path: '/graphql', body: reqBody, status: 200, data: json.data });
   return json.data as T;
 }
 
