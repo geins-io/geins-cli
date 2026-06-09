@@ -1,8 +1,7 @@
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { readFileSync } from 'fs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// Static import so Bun inlines the JSON into the source AND into the
+// `bun build --compile` binary. A runtime readFileSync of this path breaks in
+// the compiled binary / desktop sidecar (the file isn't in the embedded fs).
+import apiReferenceData from '../data/api-reference.json' with { type: 'json' };
 
 interface CompactEndpoint {
   method: string;
@@ -23,13 +22,8 @@ interface DomainGroup {
 
 type ApiReference = Record<string, DomainGroup>;
 
-let cached: ApiReference | null = null;
-
 function loadApiReference(): ApiReference {
-  if (cached) return cached;
-  const refPath = resolve(__dirname, '../data/api-reference.json');
-  cached = JSON.parse(readFileSync(refPath, 'utf-8'));
-  return cached!;
+  return apiReferenceData as ApiReference;
 }
 
 const DOMAIN_KEYWORDS: Record<string, string[]> = {
