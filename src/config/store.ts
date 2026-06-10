@@ -135,8 +135,16 @@ export async function loadSession(): Promise<StoredSession | null> {
   return readJson<StoredSession>(SESSION_PATH);
 }
 
-export async function saveSession(session: StoredSession): Promise<void> {
+/**
+ * Persist the v2 session. API-key profiles BELONG to the logged-in user: if the
+ * session's user differs from the credentials store's owner, all stored profiles
+ * are cleared (they were the previous user's keys). Same-user re-logins, account
+ * switches, and token refreshes leave them untouched. Returns whether keys were
+ * cleared so the UI can refresh its api-key status.
+ */
+export async function saveSession(session: StoredSession): Promise<{ apiKeysCleared: boolean }> {
   await writeJson(SESSION_PATH, session);
+  return reconcileCredentialsOwner(session.user.email);
 }
 
 export async function clearSession(): Promise<void> {
@@ -151,10 +159,13 @@ export async function clearSession(): Promise<void> {
  * Multiple live-API credential profiles. The live APIs are single-account (unlike
  * the v2 session), so each profile is one account's API User. Profiles are keyed by
  * their Management API Key (e.g. "prod-elproman"), and one is active at a time.
+ * `owner` is the v2 user (email) the profiles belong to — a different user logging
+ * in clears them (see saveSession/reconcileCredentialsOwner).
  */
 export interface CredentialsStore {
   active: string | null;
   profiles: Record<string, ApiCredentials>;
+  owner?: string;
 }
 
 function isCredentialsStore(value: unknown): value is CredentialsStore {
@@ -193,12 +204,38 @@ export async function loadCredentialsByName(name: string): Promise<ApiCredential
   return store.profiles[name] ?? null;
 }
 
+/**
+ * Align the credentials store's owner with the (just logged-in) user. A different
+ * user's login clears every stored profile — api keys belong to the user who added
+ * them. A store from before owner tracking (or one populated while logged out)
+ * adopts the current user without clearing.
+ */
+export async function reconcileCredentialsOwner(userEmail: string): Promise<{ apiKeysCleared: boolean }> {
+  if (!userEmail) return { apiKeysCleared: false };
+  const store = await loadCredentialsStore();
+  if (store.owner === userEmail) return { apiKeysCleared: false };
+  const cleared = Boolean(store.owner) && Object.keys(store.profiles).length > 0;
+  if (cleared) {
+    store.profiles = {};
+    store.active = null;
+  }
+  store.owner = userEmail;
+  await saveCredentialsStore(store);
+  return { apiKeysCleared: cleared };
+}
+
 /** Add (or replace) a profile keyed by its Management API Key and make it active. Returns the profile name. */
 export async function addCredentials(credentials: ApiCredentials): Promise<string> {
   const store = await loadCredentialsStore();
   const name = credentials.managementApiKey;
   store.profiles[name] = credentials;
   store.active = name;
+  // Stamp the owner so a later login by a DIFFERENT user clears these keys even
+  // when the store predates owner tracking.
+  if (!store.owner) {
+    const session = await loadSession();
+    if (session?.user?.email) store.owner = session.user.email;
+  }
   await saveCredentialsStore(store);
   return name;
 }

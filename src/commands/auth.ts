@@ -25,10 +25,11 @@ async function resolveSession(auth: AuthResponse): Promise<void> {
 
   const name = user.name || [user.firstName, user.lastName].filter(Boolean).join(' ') || 'Unknown';
 
-  await saveSession({
+  const { apiKeysCleared } = await saveSession({
     accessToken: auth.accessToken,
     refreshToken: auth.refreshToken,
     accountKey,
+    accountName: auth.accounts?.find((a) => a.accountKey === accountKey)?.displayName ?? '',
     tokenExpires: parseJwtExp(auth.accessToken),
     user: {
       email: user.email ?? '',
@@ -38,6 +39,9 @@ async function resolveSession(auth: AuthResponse): Promise<void> {
   });
 
   console.error(green(`✓ Logged in as ${bold(user.email ?? name)}`));
+  if (apiKeysCleared) {
+    console.error(dim('  Stored API keys cleared — they belonged to the previous user. Run `geins apikey set` to add yours.'));
+  }
 }
 
 export async function loginCommand(): Promise<void> {
