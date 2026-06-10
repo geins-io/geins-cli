@@ -194,13 +194,36 @@ export function App({ version = VERSION }: { version?: string }) {
     );
   }, [appState.addToChat, appState.getNextKey]);
 
+  const welcomeComponent = useMemo(
+    () => (
+      <Welcome
+        version={version}
+        user={appState.status.user || undefined}
+        account={appState.status.account || undefined}
+        accountName={appState.status.accountName || undefined}
+        apiAccount={appState.status.apiAccount || undefined}
+        authState={appState.status.authState}
+        logo={getLogo()}
+        prefix={getLogoPrefix()}
+        name={getName()}
+      />
+    ),
+    [version, appState.status.user, appState.status.account, appState.status.accountName, appState.status.apiAccount, appState.status.authState],
+  );
+
+  // /clear (and account switch, /new, memory clear) → the fresh-start UI: wipe the
+  // screen + scrollback; the epoch bump remounts ChatHistory's <Static>, which
+  // re-emits the welcome banner (its items[0]) onto the blank screen — exactly
+  // like app launch.
+  const clearToWelcome = appState.clearChat;
+
   const finalizeLogin = useCallback(async (auth: AuthResponse, accountKey: string) => {
     try {
       const user = await fetchUser(auth.accessToken);
       const name = user.name || [user.firstName, user.lastName].filter(Boolean).join(' ') || 'Unknown';
       const accountName = auth.accounts?.find(a => a.accountKey === accountKey)?.displayName ?? '';
 
-      await saveSession({
+      const { apiKeysCleared } = await saveSession({
         accessToken: auth.accessToken,
         refreshToken: auth.refreshToken,
         accountKey,
@@ -213,21 +236,32 @@ export function App({ version = VERSION }: { version?: string }) {
         },
       });
 
+      // API keys belong to the user: a different user logging in dropped the old
+      // profiles (saveSession), so flush the in-process cache and re-scope memory.
+      if (apiKeysCleared) {
+        resetCredentialsCache();
+        await applyMemoryAccount();
+      }
+
       appState.updateStatus({
         user: user.email ?? '',
         account: accountKey,
         accountName,
         connected: true,
         authState: 'logged-in',
+        ...(apiKeysCleared ? { apiAccount: '' } : {}),
       });
       logSuccess(`  ✓ Logged in as ${user.email ?? name}`);
+      if (apiKeysCleared) {
+        logDim('  Stored API keys cleared — they belonged to the previous user. Use /apikey to add yours.');
+      }
     } catch (err) {
       logError(`  ${formatError(err)}`);
     }
     appState.setActiveMode(null);
     appState.setPendingAuth(null);
     appState.setLiveComponent(null);
-  }, [appState, logSuccess, logError]);
+  }, [appState, logSuccess, logError, logDim]);
 
   const handleLoginComplete = useCallback(async (auth: AuthResponse) => {
     if (auth.accounts && auth.accounts.length > 1) {
@@ -319,11 +353,11 @@ export function App({ version = VERSION }: { version?: string }) {
     appState.updateStatus({ account: accountKey, accountName });
 
     if (changed) {
-      appState.setChatComponents([]); // clear the screen for the new account
+      clearToWelcome(); // fresh screen + welcome banner for the new account
     }
     logSuccess(`  ✓ Switched to ${accountName || accountKey}`);
     await reconcileApiKey(accountName);
-  }, [appState, logSuccess, logError, reconcileApiKey]);
+  }, [appState, logSuccess, logError, reconcileApiKey, clearToWelcome]);
 
   const handleAccountSwitchSelected = useCallback(async (accountKey: string) => {
     switchingAccountRef.current = false;
@@ -397,7 +431,10 @@ export function App({ version = VERSION }: { version?: string }) {
     const trimmed = input.trim();
     if (!trimmed) return;
 
-    logEntry({ type: 'command', content: trimmed });
+    // Copilot turns are logged as their own entry types so a session transcript reads as a
+    // conversation (`geins resume <id>`), not a flat command list.
+    const isCopilotTurn = appState.copilotActive && !trimmed.startsWith('/');
+    logEntry({ type: isCopilotTurn ? 'copilot-prompt' : 'command', content: trimmed });
 
     // Mark the operation in flight and register its abort signal so Ctrl-C can cancel
     // in-flight API calls (via the ambient signal) and kill copilot/geins subprocesses.
@@ -629,8 +666,10 @@ export function App({ version = VERSION }: { version?: string }) {
             }
             pending = lastRound ? '' : followupCleaned;
           }
-          // Persist the turn (original question + a one-line answer summary) for /memory.
+          // Persist the turn (original question + a one-line answer summary) for /memory,
+          // and the full answer into the session transcript for `geins resume`.
           await recordInteraction(trimmed, lastAnswer);
+          await logEntry({ type: 'copilot-response', content: lastAnswer });
         } else {
           // No assistant text and not garbled — still clear the working indicator so it doesn't linger.
           appState.setLiveComponent(null);
@@ -2322,7 +2361,7 @@ export function App({ version = VERSION }: { version?: string }) {
         case 'new':
           clearConversationHistory();
           clearHistory();
-          appState.setChatComponents([]);
+          clearToWelcome();
           logSuccess('  ✓ New conversation started');
           break;
 
@@ -2359,7 +2398,7 @@ export function App({ version = VERSION }: { version?: string }) {
             await clearHistory();
             await clearCommandContext();
             await clearKnowledge();
-            appState.setChatComponents([]);
+            clearToWelcome();
             const who = appState.status.accountName || appState.status.account || 'shared';
             logSuccess(`  ✓ Memory cleared for ${who} — starting fresh`);
             break;
@@ -2429,7 +2468,7 @@ export function App({ version = VERSION }: { version?: string }) {
         }
 
         case 'clear':
-          appState.setChatComponents([]);
+          clearToWelcome(); // full reset: wiped screen + fresh welcome banner, like app start
           break;
 
         case 'exit':
@@ -2455,24 +2494,7 @@ export function App({ version = VERSION }: { version?: string }) {
       // Clear any lingering working/live indicator once the command (or copilot turn) is done.
       appState.setLiveComponent(null);
     }
-  }, [appState, logText, logDim, logSuccess, logError, exit]);
-
-  const welcomeComponent = useMemo(
-    () => (
-      <Welcome
-        version={version}
-        user={appState.status.user || undefined}
-        account={appState.status.account || undefined}
-        accountName={appState.status.accountName || undefined}
-        apiAccount={appState.status.apiAccount || undefined}
-        authState={appState.status.authState}
-        logo={getLogo()}
-        prefix={getLogoPrefix()}
-        name={getName()}
-      />
-    ),
-    [version, appState.status.user, appState.status.account, appState.status.accountName, appState.status.apiAccount, appState.status.authState],
-  );
+  }, [appState, logText, logDim, logSuccess, logError, exit, clearToWelcome]);
 
   if (!appState.ready) {
     return (
@@ -2492,6 +2514,7 @@ export function App({ version = VERSION }: { version?: string }) {
         welcomeComponent={welcomeComponent}
         queuedComponents={appState.chatComponents}
         liveComponent={appState.liveComponent}
+        epoch={appState.historyEpoch}
       />
 
       {appState.activeMode === 'login' && (

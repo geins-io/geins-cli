@@ -6,6 +6,8 @@ interface ChatHistoryProps {
   welcomeComponent?: React.ReactNode;
   queuedComponents: React.ReactNode[];
   liveComponent?: React.ReactNode;
+  /** Bumped by /clear (appState.clearChat): remounts <Static> so it re-emits the fresh banner. */
+  epoch?: number;
 }
 
 const keyFor = (component: React.ReactNode, index: number): string =>
@@ -33,6 +35,7 @@ export function ChatHistory({
   welcomeComponent,
   queuedComponents,
   liveComponent,
+  epoch = 0,
 }: ChatHistoryProps) {
   const { columns } = useWindowSize();
 
@@ -44,7 +47,9 @@ export function ChatHistory({
 
   return (
     <Box flexDirection="column">
-      <Static key={columns} items={items}>
+      {/* Remount on width change (re-emit at new width; ink >= 7.0.5 required for
+          remounts to re-emit at all) and on /clear's epoch bump (fresh banner). */}
+      <Static key={`${columns}:${epoch}`} items={items}>
         {(item) => (
           <Box key={item.key} flexDirection="column">{item.node}</Box>
         )}

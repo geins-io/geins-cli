@@ -124,7 +124,7 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
           paddingX={1}
           paddingY={1}
         >
-           <Text>👋 Hello World!</Text>
+           <Text>👋 <Text> </Text>Hello World!</Text>
            <Text> </Text>
            <Text>Welcome to <Text bold color="cyan">{name}</Text> — Your gateway to agentic commerce at the speed of the command line.</Text>
            <Text> </Text>

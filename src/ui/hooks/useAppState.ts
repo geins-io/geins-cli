@@ -65,14 +65,35 @@ export function useAppState() {
     setChatComponents(prev => [...prev, component]);
   }, []);
 
+  // Bumped by clearChat; ChatHistory keys its <Static> on it to force a remount.
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+
+  /**
+   * Reset to the fresh-start UI, exactly like app launch: wipe the screen AND
+   * scrollback (same escape launchTui uses on startup), drop the committed
+   * history, and bump the epoch so ChatHistory's <Static> remounts and
+   * re-emits just the welcome banner onto the blank screen.
+   *
+   * The remount is required: <Static> is append-only (it only renders
+   * `items.slice(printedCount)`), so shrinking the array without a remount
+   * desyncs that index and new messages stop appearing. Remount re-emission
+   * needs ink >= 7.0.5 — earlier 7.x dropped the reconciler's staticNode
+   * reference on key-driven remounts and silently emitted nothing.
+   */
+  const clearChat = useCallback(() => {
+    process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+    setChatComponents([]);
+    setHistoryEpoch(e => e + 1);
+  }, []);
+
   // Load session + config on mount, start memory session
   useEffect(() => {
     Promise.all([loadSession(), loadConfig(), loadCredentialsStore()]).then(async ([session, config, credentials]) => {
-      // Scope memory by the composite (v2 session + active apikey profile) key before
-      // starting the session log, so per-account data never leaks across accounts.
-      await applyMemoryAccount();
+      // Scope memory by the `{accountName}_{apikeyProfile}` bucket key before starting
+      // the session log, so per-account data never leaks across accounts. The session
+      // index is labeled with the same readable key.
+      const bucket = await applyMemoryAccount();
       setStatus(s => ({ ...s, apiAccount: credentials.active ?? '' }));
-      let sessionId: string;
       if (session) {
         setStatus(s => ({
           ...s,
@@ -80,10 +101,8 @@ export function useAppState() {
           account: session.accountKey,
           accountName: session.accountName ?? '',
         }));
-        sessionId = await startSession(session.accountKey);
-      } else {
-        sessionId = await startSession();
       }
+      const sessionId = await startSession(bucket);
       // Set the terminal window/tab title now that the session id exists. OSC 0 is
       // out-of-band, so it doesn't disturb Ink's rendering.
       setBaseTitle(`Synapse - ${sessionId}`);
@@ -123,6 +142,8 @@ export function useAppState() {
     toggleTheme,
     chatComponents,
     setChatComponents,
+    clearChat,
+    historyEpoch,
     liveComponent,
     setLiveComponent,
     addToChat,
