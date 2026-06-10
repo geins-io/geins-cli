@@ -10,7 +10,8 @@ import { loadSession, loadCredentialsStore } from '../config/store.ts';
  * (legacy `GEINS_CONFIG_DIR` is still honored as a fallback) — used to relocate or sandbox
  * state, and the only reliable way to redirect it in tests: Bun's `os.homedir()` caches at
  * process start and ignores a runtime-mutated `process.env.HOME`, so a test must set
- * `GEINS_SYNAPSE_DIR` instead. Per-account subfolders live directly inside this root.
+ * `GEINS_SYNAPSE_DIR` instead. Per-account subfolders live directly inside this root, named
+ * `{accountName}_{apikeyProfile}` (e.g. `launch5_prod-launch5`); `_shared` holds account-less state.
  */
 function baseDir(): string {
   return process.env.GEINS_SYNAPSE_DIR || process.env.GEINS_CONFIG_DIR || join(homedir(), '.synapse');
@@ -31,31 +32,72 @@ export function getMemoryAccount(): string | undefined {
   return currentAccountKey;
 }
 
-/** Keep account-key segments filesystem-safe and free of the `__` composite separator. */
+/** Keep account-key segments filesystem-safe and free of the `_` bucket separator. */
 function sanitizeSegment(s: string): string {
   return s.replace(/[^A-Za-z0-9.-]+/g, '-');
 }
 
+function joinSegments(parts: Array<string | undefined>, sep: string): string | undefined {
+  const present = parts
+    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+    .map(sanitizeSegment);
+  return present.length ? present.join(sep) : undefined;
+}
+
+interface AccountKeyResolution {
+  key?: string;
+  /** The pre-2026-06 format `{v2AccountKey}__{profile}` — only used to rename old folders. */
+  legacyKey?: string;
+}
+
+async function resolveAccountKeys(): Promise<AccountKeyResolution> {
+  const [session, creds] = await Promise.all([loadSession(), loadCredentialsStore()]);
+  const profileName = creds.active ?? undefined;
+  // Human-readable account name: the active profile's own accountName (set via
+  // `merchant config set --store-account`) wins; the v2 session's accountName is the fallback.
+  const accountName =
+    (profileName ? creds.profiles[profileName]?.accountName : undefined) || session?.accountName;
+  return {
+    key: joinSegments([accountName, profileName], '_'),
+    legacyKey: joinSegments([session?.accountKey, profileName], '__'),
+  };
+}
+
 /**
- * The composite memory-account key: `{v2SessionAccountKey}__{activeApikeyProfile}`.
+ * The memory-account key: `{accountName}_{activeApikeyProfile}` — e.g. `launch5_prod-launch5`.
  * Either part is omitted when absent; returns `undefined` when neither exists (→ the
  * `_shared` bucket). Memory is keyed by this so chat history, command context, and
  * knowledge stay compartmentalized per account and never leak across an /apikey switch.
+ * Segments are sanitized to [A-Za-z0-9.-], so the single `_` separator stays unambiguous.
  */
 export async function resolveMemoryAccountKey(): Promise<string | undefined> {
-  const [session, creds] = await Promise.all([loadSession(), loadCredentialsStore()]);
-  const parts = [session?.accountKey, creds.active]
-    .filter((p): p is string => typeof p === 'string' && p.length > 0)
-    .map(sanitizeSegment);
-  return parts.length ? parts.join('__') : undefined;
+  return (await resolveAccountKeys()).key;
 }
 
-/** Resolve the composite key for the active session + apikey profile and apply it. */
+/**
+ * Rename a legacy-format account folder (`{v2AccountKey}__{profile}`) under `base` to the
+ * current `{accountName}_{profile}` name, unless the new one already exists. Applies to both
+ * the Synapse memory root and the output dir, which mirror each other's per-account layout.
+ */
+export async function migrateLegacyAccountDir(base: string): Promise<void> {
+  const { key, legacyKey } = await resolveAccountKeys();
+  if (!key || !legacyKey || key === legacyKey) return;
+  const oldDir = join(base, legacyKey);
+  const newDir = join(base, key);
+  if ((await fileExists(oldDir)) && !(await fileExists(newDir))) {
+    try { await rename(oldDir, newDir); } catch { /* cross-device or permission — start fresh */ }
+  }
+}
+
+/** Resolve the bucket key for the active session + apikey profile and apply it. */
 export async function applyMemoryAccount(): Promise<string | undefined> {
   // Relocate a pre-Synapse store to ~/.synapse before anything reads from it — otherwise a
   // read-only command (memory list, copilot prompt build) would see the empty new root and
   // appear to have lost all memory until the first write triggered the move.
   await migrateSynapseRoot();
+  // Same idea for the bucket itself: rename an old `{accountKey}__{profile}` folder to the
+  // readable `{accountName}_{profile}` form before the first read.
+  await migrateLegacyAccountDir(baseDir());
   const key = await resolveMemoryAccountKey();
   setMemoryAccount(key);
   return key;

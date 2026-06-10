@@ -2,7 +2,7 @@ import { mkdir, appendFile, writeFile } from 'node:fs/promises';
 import { join, isAbsolute, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { loadConfig } from '../config/store.ts';
-import { getMemoryAccount, resolveMemoryAccountKey } from '../memory/store.ts';
+import { getMemoryAccount, resolveMemoryAccountKey, migrateLegacyAccountDir } from '../memory/store.ts';
 
 let cachedDir: string | null | undefined; // undefined = not yet resolved
 let cachedAccountSeg: string | undefined; // disk-resolved fallback (cli/subprocess has no in-process account)
@@ -58,10 +58,19 @@ async function accountSegment(): Promise<string> {
   return cachedAccountSeg;
 }
 
+let outputMigrationDone = false;
+
 /** The account-nested write dir (`<base>/<account>`), or null if output is disabled. */
 export async function getAccountOutputDir(): Promise<string | null> {
   const base = await resolveDir();
-  return base ? join(base, await accountSegment()) : null;
+  if (!base) return null;
+  // The output dir mirrors the memory layout — rename an old `{accountKey}__{profile}`
+  // subfolder to the readable `{accountName}_{profile}` form once per process.
+  if (!outputMigrationDone) {
+    outputMigrationDone = true;
+    await migrateLegacyAccountDir(base);
+  }
+  return join(base, await accountSegment());
 }
 
 /** Resolve the account-nested output dir and create it if set. Returns the absolute path, or null if disabled. */

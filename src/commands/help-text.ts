@@ -370,9 +370,14 @@ export const MEMORY_HELP = [
   'Notes:',
   '- Stored in the global Synapse folder `~/.synapse` (override with $GEINS_SYNAPSE_DIR) — the single',
   '  memory shared by every model backend; legacy `~/.config/geins/memory` is migrated on first use.',
-  '- Memory is account-scoped — switching apikey/account shows a different bucket (sub-folder of Synapse).',
+  '- Memory is account-scoped — switching apikey/account shows a different bucket. Buckets are Synapse',
+  '  sub-folders named `<accountName>_<apikeyProfile>` (e.g. `launch5_prod-launch5`); the output folder',
+  '  nests its files the same way.',
   '- The copilot writes here automatically: [MEMORY]category:fact[/MEMORY] tags and `geins memory add`',
   '  both land in `add`; each copilot turn also records the prompt + a one-line answer summary.',
+  '- Full session transcripts (commands + copilot turns) live in the bucket\'s sessions/ folder —',
+  '  list them with `geins resume`, read one with `geins resume <id>`; the copilot does the same',
+  '  when asked to continue earlier work.',
   '- View it interactively with `/memory`; `/memory clear` also resets chat history + command context.',
 ].join('\n');
 

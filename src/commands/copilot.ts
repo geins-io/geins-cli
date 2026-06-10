@@ -20,6 +20,8 @@ import {
   addFact,
   setPreference,
   extractMemoryBlocks,
+  getMemoryAccount,
+  resolveMemoryAccountKey,
 } from '../memory/index.ts';
 
 export interface CopilotOption {
@@ -101,6 +103,14 @@ export interface ChatMessage {
  * the conversation is reset (new chat, account switch), which restarts with a fresh session.
  */
 let resumeSessionId: string | undefined;
+
+/**
+ * True once a real chat turn in this process has carried the SESSION START orientation
+ * (run `geins help` first). Flipped by the chat paths — NOT inside buildFullPrompt — so
+ * getContextUsageAsync's display-only prompt rebuild never consumes it. Rolling history
+ * survives TUI restarts, so without this flag a restarted app would never re-orient.
+ */
+let sessionOriented = false;
 
 export function clearConversationHistory(): void {
   resumeSessionId = undefined;
@@ -224,7 +234,9 @@ const SYSTEM_CONTEXT = [
 const MEMORY_INSTRUCTIONS = [
   'MEMORY: this app keeps its persistent memory in the global Synapse folder at `~/.synapse` (overridable',
   'via $GEINS_SYNAPSE_DIR). That folder is THE single source of truth for everything you remember — it is',
-  'shared across ALL model backends (Claude, Ollama, etc.) and per-account subfolders live inside it. It is',
+  'shared across ALL model backends (Claude, Ollama, etc.) and per-account subfolders live inside it, named',
+  '`<accountName>_<apikeyProfile>` (e.g. `launch5_prod-launch5`). Memory AND output files are scoped to',
+  'that bucket — never read from or write into another account\'s bucket. It is',
   'the same store the `/memory` (geins memory) command reads and writes. ALWAYS treat it as your memory:',
   'rely on what has been recalled into this prompt from it, and persist anything new there. Do NOT invent a',
   'separate memory location (e.g. a backend\'s own ~/.claude store) — always read from and store to Synapse.',
@@ -233,6 +245,10 @@ const MEMORY_INSTRUCTIONS = [
   '  • inline tag (preferred, one per line, kept out of the visible reply): [MEMORY]category:the fact[/MEMORY]',
   '  • or run: geins memory add <category> "the fact"',
   'category is one of: project, workflow, api, preference, pattern. Record proactively but only durable facts — not one-off values or chit-chat. Example: [MEMORY]preference:user wants compact output with no IDs[/MEMORY]',
+  'PAST SESSIONS: full transcripts of previous sessions (commands, copilot prompts and answers) are also',
+  'stored in this account\'s bucket. Do NOT read them unprompted — but when the user asks to recall or',
+  'continue earlier work ("what did we do yesterday", "pick up where we left off"), run `geins resume`',
+  'to list recent sessions, then `geins resume <id>` to read a transcript, and carry on from there.',
 ].join('\n');
 
 function getMaxPromptTokens(option?: CopilotOption): number {
@@ -243,7 +259,11 @@ function getMaxPromptTokens(option?: CopilotOption): number {
 async function buildFullPrompt(userMessage: string, option?: CopilotOption): Promise<string> {
   const maxTokens = getMaxPromptTokens(option);
   const memoryOn = await getMemoryEnabled();
-  const systemContext = memoryOn ? `${SYSTEM_CONTEXT}\n${MEMORY_INSTRUCTIONS}` : SYSTEM_CONTEXT;
+  // The active per-account bucket (`<accountName>_<apikeyProfile>`) — prefer the in-process
+  // value (live /apikey switches in the TUI), fall back to disk for copilot subprocesses.
+  const bucket = getMemoryAccount() ?? (await resolveMemoryAccountKey()) ?? '_shared';
+  const bucketLine = `ACTIVE ACCOUNT BUCKET: \`${bucket}\` — this account's memory subfolder and output subfolder. Everything you remember or save for this account belongs there.`;
+  const systemContext = memoryOn ? `${SYSTEM_CONTEXT}\n${MEMORY_INSTRUCTIONS}\n${bucketLine}` : SYSTEM_CONTEXT;
   const systemTokens = estimateTokens(systemContext);
   const userMsgText = userMessage ? `User: ${userMessage}` : '';
   const userMsgTokens = estimateTokens(userMsgText);
@@ -268,6 +288,19 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
     msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
   );
 
+  // First real turn of this process OR a fresh conversation: have the model orient itself on
+  // the live command surface before acting. The embedded catalog is one line per group —
+  // `geins help` plus the relevant `geins <group> help` is the full, current picture. Not
+  // re-injected on later turns so the copilot doesn't re-run help every turn.
+  const sessionStartSection = (recentMessages.length === 0 || !sessionOriented)
+    ? [
+        'SESSION START: this is the first turn of a new session. Begin by running `geins help` (in a',
+        '```bash block) to load the full picture of geins capabilities, and `geins <group> help` for any',
+        'group the task touches, BEFORE acting on the request — the catalog above is a summary, not the',
+        'complete or necessarily current surface. Skip this only for pure chit-chat with no geins action.',
+      ].join('\n')
+    : '';
+
   const outDir = await getOutputDir();
   // Show the account-nested folder (the copilot's actual cwd), not the un-nested base.
   const effectiveDir = (await getAccountOutputDir()) ?? process.cwd();
@@ -276,6 +309,7 @@ async function buildFullPrompt(userMessage: string, option?: CopilotOption): Pro
     : `Output folder: ${effectiveDir} (the directory geins was launched from; set a fixed one with \`geins output <dir>\`)`;
 
   const parts = [systemContext, outputSection];
+  if (sessionStartSection) parts.push(sessionStartSection);
   if (memoryOn && knowledgeSection) parts.push(knowledgeSection);
   if (manifestSection) parts.push(manifestSection);
   if (apiRefSection) parts.push(apiRefSection);
@@ -409,6 +443,7 @@ export async function chat(prompt: string): Promise<string> {
   // the model if they're in the prompt. Omitting them broke multi-step flows where
   // a follow-up references "the command results" / "my original question".
   const fullPrompt = await buildFullPrompt(prompt, option);
+  sessionOriented = true;
   const cmd = option.buildCmd(config.model);
 
   const proc = Bun.spawn(cmd, {
@@ -529,6 +564,7 @@ export async function chatStream(
     resumeId: string | undefined,
   ): Promise<{ buffer: string; sessionId?: string; exitCode: number; readStderr: () => Promise<string> }> => {
     const fullPrompt = resumeId ? prompt : await buildFullPrompt(prompt, option);
+    if (!resumeId) sessionOriented = true;
     const cmd = option.buildCmd(config.model);
     if (resumeId) cmd.push('--resume', resumeId);
 
