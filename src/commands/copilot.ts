@@ -218,6 +218,14 @@ const SYSTEM_CONTEXT = [
   '    creating one with geins product relation-types add <name> first. Verify existing links with',
   '    geins product relations <id> before proposing duplicates.',
   '',
+  'LONG-RUNNING / BACKGROUND WORK:',
+  '- NEVER end your turn while a batch job or background process you started is still running. You are',
+  '  a one-shot process: nothing of you survives the turn to "report back when it finishes" — any such',
+  '  promise is impossible to keep. Stay in the turn instead: poll the job (its output file, its process)',
+  '  and print a ONE-LINE progress update between polls (e.g. "assigned 230/531, 0 failures") so the user',
+  '  sees live progress. Only give your final answer when the work is COMPLETE or genuinely blocked.',
+  '- Prefer foreground batches that print progress as they run over fire-and-forget background processes.',
+  '',
   'RULES:',
   '- ALWAYS output commands in ```bash blocks. Never tell the user to run them manually.',
   '- To create a workflow, output: geins workflow create --body \'<full JSON>\'',
@@ -477,27 +485,33 @@ interface RawStreamEvent {
   text?: string;
 }
 
-function parseStreamJsonLine(line: string): RawStreamEvent | null {
+function parseStreamJsonLine(line: string): RawStreamEvent[] {
   try {
     const event = JSON.parse(line);
     if (event.type === 'assistant' && event.message?.content) {
+      // An assistant message can carry several blocks (prose + one or more tool_use,
+      // e.g. parallel tool calls) — emit them ALL, or spinner entries go missing.
+      const events: RawStreamEvent[] = [];
       for (const block of event.message.content) {
         if (block.type === 'tool_use') {
-          return { type: 'tool_use', toolName: block.name, toolInput: block.input };
-        }
-        if (block.type === 'text' && block.text) {
-          return { type: 'text', text: block.text };
+          events.push({ type: 'tool_use', toolName: block.name, toolInput: block.input });
+        } else if (block.type === 'text' && block.text) {
+          events.push({ type: 'text', text: block.text });
         }
       }
+      return events;
     }
     if (event.type === 'user' && event.tool_use_result) {
-      return { type: 'tool_result' };
+      // NOTE: tool_result events carry no tool_use id here, so the UI pairs each one with
+      // the OLDEST still-running entry (FIFO). With parallel tool calls that finish out of
+      // order, a ✓ can land on the wrong sibling — cosmetic only, all entries end done.
+      return [{ type: 'tool_result' }];
     }
     if (event.type === 'result' && typeof event.result === 'string') {
-      return { type: 'text', text: event.result };
+      return [{ type: 'text', text: event.result }];
     }
   } catch {}
-  return null;
+  return [];
 }
 
 function shortenPath(p: string): string {
@@ -505,12 +519,20 @@ function shortenPath(p: string): string {
   if (home && p.startsWith(home)) return '~' + p.slice(home.length);
   const cwd = process.cwd();
   if (p.startsWith(cwd + '/')) return p.slice(cwd.length + 1);
+  // Agent scratch space (/private/tmp/claude-*/…, /var/folders/…) — the directory maze is
+  // meaningless to the user; the file name is the whole signal.
+  if (/^\/(?:private\/)?(?:tmp|var\/folders)\//.test(p)) return p.split('/').pop() ?? p;
   return p;
 }
 
 function formatToolLabel(name: string, input: Record<string, unknown>): string {
   switch (name) {
-    case 'Read': return `Read ${shortenPath(String(input.file_path ?? 'file'))}`;
+    case 'Read': {
+      const p = String(input.file_path ?? 'file');
+      // Polling a background task's output file is "checking progress", not "reading a file".
+      if (/\/tasks\/[^/]+\.output$/.test(p)) return 'Check background task progress';
+      return `Read ${shortenPath(p)}`;
+    }
     case 'Edit': return `Edit ${shortenPath(String(input.file_path ?? 'file'))}`;
     case 'Write': return `Write ${shortenPath(String(input.file_path ?? 'file'))}`;
     case 'Bash': {
@@ -524,6 +546,13 @@ function formatToolLabel(name: string, input: Record<string, unknown>): string {
     case 'WebFetch': return `Fetch ${input.url ?? ''}`;
     case 'TodoWrite': return 'Update tasks';
     case 'Agent': return `Spawn agent: ${input.description ?? input.subagent_type ?? ''}`;
+    // Harness-internal tools the agent uses around background work — name them by what
+    // they mean to the user, not by their API identifiers.
+    case 'ToolSearch': return 'Look up extra tools';
+    case 'Monitor': return 'Wait for background task';
+    case 'TaskOutput':
+    case 'BashOutput': return 'Check background task output';
+    case 'TaskCreate': return `Start background task${input.description ? `: ${input.description}` : ''}`;
     default: return name;
   }
 }
@@ -618,27 +647,28 @@ export async function chatStream(
         for (const line of lines) {
           if (!line.trim()) continue;
           captureSession(line);
-          const raw = parseStreamJsonLine(line);
-          if (!raw) continue;
-          if (raw.type === 'text' && raw.text) {
-            lastText = raw.text;
-            onChunk(raw.text);
-            onEvent?.({ kind: 'text', text: raw.text });
-          } else if (raw.type === 'tool_use' && raw.toolName) {
-            const label = formatToolLabel(raw.toolName, raw.toolInput ?? {});
-            onEvent?.({ kind: 'tool_start', toolName: raw.toolName, label });
-          } else if (raw.type === 'tool_result') {
-            onEvent?.({ kind: 'tool_end' });
+          for (const raw of parseStreamJsonLine(line)) {
+            if (raw.type === 'text' && raw.text) {
+              lastText = raw.text;
+              onChunk(raw.text);
+              onEvent?.({ kind: 'text', text: raw.text });
+            } else if (raw.type === 'tool_use' && raw.toolName) {
+              const label = formatToolLabel(raw.toolName, raw.toolInput ?? {});
+              onEvent?.({ kind: 'tool_start', toolName: raw.toolName, label });
+            } else if (raw.type === 'tool_result') {
+              onEvent?.({ kind: 'tool_end' });
+            }
           }
         }
       }
       if (lineBuf.trim()) {
         captureSession(lineBuf);
-        const raw = parseStreamJsonLine(lineBuf);
-        if (raw?.type === 'text' && raw.text) {
-          lastText = raw.text;
-          onChunk(raw.text);
-          onEvent?.({ kind: 'text', text: raw.text });
+        for (const raw of parseStreamJsonLine(lineBuf)) {
+          if (raw.type === 'text' && raw.text) {
+            lastText = raw.text;
+            onChunk(raw.text);
+            onEvent?.({ kind: 'text', text: raw.text });
+          }
         }
       }
       buffer = lastText;

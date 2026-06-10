@@ -471,6 +471,9 @@ export function App({ version = VERSION }: { version?: string }) {
       try {
         let streamBuffer = '';
         const activityLog: ActivityEntry[] = [];
+        // One clock for the whole user turn (initial stream + agentic follow-up rounds) —
+        // the header timer must show total wall time, not reset per round.
+        const turnStartedAt = Date.now();
 
         // Text shown for a model turn: drop <think> blocks and the ```bash``` command
         // blocks (those run and show as "⟳ <cmd>", so repeating them is just noise).
@@ -493,17 +496,20 @@ export function App({ version = VERSION }: { version?: string }) {
               providerLabel={providerLabel}
               entries={[...activityLog]}
               isWorking={true}
+              startedAt={turnStartedAt}
             />,
           );
         };
 
         const handleEvent = (event: StreamEvent) => {
           if (event.kind === 'tool_start') {
-            activityLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false });
+            activityLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false, startedAt: Date.now() });
             renderActivity();
           } else if (event.kind === 'tool_end') {
-            const last = [...activityLog].reverse().find(e => e.kind === 'tool' && !e.done);
-            if (last) last.done = true;
+            // Results carry no tool id, so pair FIFO: the oldest still-running entry finishes
+            // first. Parallel calls completing out of order can mismark a sibling — cosmetic.
+            const first = activityLog.find(e => e.kind === 'tool' && !e.done);
+            if (first) first.done = true;
             renderActivity();
           } else if (event.kind === 'text') {
             // text events update the final answer — handled by onChunk
@@ -606,6 +612,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   providerLabel={providerLabel}
                   entries={[...followupLog]}
                   isWorking={true}
+                  startedAt={turnStartedAt}
                 />,
               );
             };
@@ -632,11 +639,12 @@ export function App({ version = VERSION }: { version?: string }) {
               },
               (event) => {
                 if (event.kind === 'tool_start') {
-                  followupLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false });
+                  followupLog.push({ kind: 'tool', label: event.label ?? event.toolName ?? 'Working', done: false, startedAt: Date.now() });
                   renderFollowup();
                 } else if (event.kind === 'tool_end') {
-                  const last = [...followupLog].reverse().find(e => e.kind === 'tool' && !e.done);
-                  if (last) last.done = true;
+                  // FIFO pairing — see handleEvent above.
+                  const first = followupLog.find(e => e.kind === 'tool' && !e.done);
+                  if (first) first.done = true;
                   renderFollowup();
                 }
               },
