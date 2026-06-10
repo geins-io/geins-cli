@@ -14,15 +14,20 @@
     "serve": "bun run src/bin.ts serve",
     "stage:sidecar": "bun run scripts/stage-sidecar.ts",
     "tauri": "tauri",
-    "tauri:dev": "bun run stage:sidecar && tauri dev",
+    "tauri:dev": "bun run stage:sidecar --if-missing && DYLD_LIBRARY_PATH= tauri dev",
     "tauri:build": "bun run stage:sidecar && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/bun": "latest",
     "@types/react": "^19.2.14",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "yaml": "^2.9.0"
   },
+  "trustedDependencies": [
+    "node-pty"
+  ],
   "peerDependencies": {
     "typescript": "^5"
   },
@@ -31,6 +36,7 @@
     "ink-select-input": "^6.2.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
+    "node-pty": "^1.1.0",
     "react": "^19.2.5"
   }
 }

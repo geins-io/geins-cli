@@ -1,7 +1,7 @@
 [package]
 name = "geins-desktop"
 version = "0.1.0"
-description = "Geins desktop app"
+description = "Synapse — the Geins desktop app"
 authors = ["Geins"]
 edition = "2021"
 rust-version = "1.77"

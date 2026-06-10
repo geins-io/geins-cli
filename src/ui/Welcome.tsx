@@ -1,10 +1,9 @@
 import React from 'react';
 import { Box, Text, useWindowSize } from 'ink';
-import { LOGO_FULL, LOGO_COMPACT, PROMPT, SUFFIX, LITIUM_LOGO, LITIUM_PROMPT, LITIUM_SUFFIX, type LogoVariant } from './logos';
+import { PROMPT, WORDMARK, type LogoVariant } from './logos';
 
 // Horizontal (x-axis) gradient stops: cyan → blue → green, left → right.
 const GRADIENT = ['#00e5ff', '#3b82f6', '#22c55e'];
-const FULL_WIDTH = 86;
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -36,9 +35,6 @@ interface WelcomeProps {
   authState?: AuthState;
   logo?: LogoVariant;
   prefix?: boolean;
-  suffix?: boolean;
-  /** Show the central wordmark (the "GEINS"/"LITIUM" art). Off → just the prefix + suffix flourishes. */
-  wordmark?: boolean;
   name?: string;
 }
 
@@ -48,7 +44,7 @@ const AUTH_NOTICE: Partial<Record<AuthState, string>> = {
   expired: 'Your session has expired. Run /login to re-authenticate.',
 };
 
-export function Welcome({ version, user, account, accountName, apiAccount, authState, logo = 'geins', prefix = true, suffix = true, wordmark = true, name = 'Synapse' }: WelcomeProps) {
+export function Welcome({ version, user, account, accountName, apiAccount, authState, logo = 'synapse', prefix = true, name = 'Synapse' }: WelcomeProps) {
   const { columns, rows: windowRows } = useWindowSize();
 
   // Degrade the banner by available height so the whole frame stays inside the viewport. A frame
@@ -58,28 +54,18 @@ export function Welcome({ version, user, account, accountName, apiAccount, authS
   // clear `rows` with room for the input box, which shares the same Ink frame (~8 lines, matching the
   // reserve in ChatHistory): full banner ≈30 lines, +logo+hints ≈16, logo only ≈12.
   const h = windowRows ?? 24;
+
+  // The banner is "❯_ SYNAPSE": the prompt flourish + the wordmark. Drop the prompt when the
+  // pair overflows the terminal, and the whole logo when even the wordmark alone doesn't fit;
+  // the outer Box adds paddingX={1} on each side (2 cols).
+  const artWidth = (art: string[]) => Math.max(...art.map((l) => [...l].length));
+  const showPrompt = prefix && artWidth(PROMPT) + artWidth(WORDMARK) <= columns - 2;
   // BRAND_LOGO=none hides the ASCII banner entirely, leaving just the text identity line (the name).
-  const showLogo = logo !== 'none' && h >= 21;
+  const showLogo = logo !== 'none' && h >= 21 && artWidth(WORDMARK) <= columns - 2;
   const showHints = h >= 25;
   const showIntroBox = h >= 39;
 
-  // Pick the wordmark and its matching flourishes, then optionally wrap with the prefix ("/" for geins,
-  // "_" for litium) and the suffix ("SYNAPSE" for geins, "TERMINAL" for litium).
-  const isLitium = logo === 'litium';
-  const fullBase = isLitium ? LITIUM_LOGO : columns >= FULL_WIDTH ? LOGO_FULL : LOGO_COMPACT;
-  // Drop the wordmark but keep its row count, so prefix/suffix art still aligns — leaves just the flourishes.
-  const base = wordmark ? fullBase : fullBase.map(() => '');
-  const promptArt = isLitium ? LITIUM_PROMPT : PROMPT;
-  const suffixArt = isLitium ? LITIUM_SUFFIX : SUFFIX;
-
-  // Drop the suffix flourish ("SYNAPSE"/"AGENT") when the full banner — prefix + wordmark + suffix —
-  // would overflow the terminal; the outer Box adds paddingX={1} on each side (2 cols).
-  const artWidth = (art: string[]) => Math.max(...art.map((l) => [...l].length));
-  const prefixWidth = prefix ? artWidth(promptArt) : 0;
-  const fullWidth = prefixWidth + artWidth(base) + artWidth(suffixArt);
-  const showSuffix = suffix && fullWidth <= columns - 2;
-
-  const rows = base.map((line, i) => `${prefix ? promptArt[i] : ''}${line}${showSuffix ? suffixArt[i] : ''}`);
+  const rows = WORDMARK.map((line, i) => `${showPrompt ? PROMPT[i] : ''}${line}`);
   const width = Math.max(...rows.map((r) => [...r].length));
 
   const authNotice = authState ? AUTH_NOTICE[authState] : undefined;

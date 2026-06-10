@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Geins",
+  "productName": "Synapse",
   "version": "../package.json",
   "identifier": "io.geins.cli",
   "build": {
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Geins",
+        "title": "Synapse",
         "width": 1100,
         "height": 760,
         "url": "index.html"

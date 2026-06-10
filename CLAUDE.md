@@ -9,7 +9,8 @@ This file is for whoever **extends the CLI**. For *using* a command, run `geins 
 bun install
 bun run dev          # interactive TUI
 bun run serve        # headless HTTP/WS backend (the desktop sidecar) — `geins serve --port 0 --token <t>`
-bun run tauri:dev    # desktop app (stages the CLI as a sidecar, then runs Tauri)
+bun run tauri:dev    # desktop app — DEV-FOLLOW: runs serve from source under `bun --watch`,
+                     # so editing src/** hot-reloads the running desktop app (~1s)
 bun link             # then `geins ...` runs this source directly
 geins --help
 ```
@@ -23,7 +24,10 @@ src/
   version.ts          # ★ single version source (reads package.json) — don't hardcode versions
   runtime.ts          # selfInvocation(): re-invoke THIS binary for subcommands (compiled vs bun run)
   server/serve.ts     # `geins serve` — localhost HTTP/WS backend for the desktop shell
-  server/web-shell.ts # the desktop web UI (self-contained HTML string, bundled into the binary)
+  server/web-shell.ts # the desktop web UI: fullscreen xterm.js running the REAL TUI via /tty
+  server/pty.ts       # PTY spawn on node-pty's NATIVE binding (its JS layer breaks under Bun)
+  server/pty-assets.ts # dev resolver for pty.node/spawn-helper (swapped at compile time)
+  server/pty-extract.ts # compiled-binary path: extract embedded natives to disk for dlopen
   api/client.ts       # v2 gateway client — JWT (auto-refresh) + x-account-key
   api/live-client.ts  # live Management/Merchant client — Basic auth + X-ApiKey (api-key profiles)
   api/errors.ts       # error types and formatting
@@ -67,6 +71,18 @@ geins update          → CLI self-update (OTA)
 Desktop app (src-tauri/): Rust spawns `geins serve --port 0 --token <secret>`,
 reads the port from stdout, and points the webview at that local server. The web
 shell (server/web-shell.ts) talks plain HTTP/WS to the sidecar — NO Tauri IPC.
+
+Desktop DEV-FOLLOW: in `tauri dev` the backend is `bun --watch src/bin.ts serve`
+(source, not the compiled sidecar). Any src/** edit hot-restarts serve in place;
+the fresh GEINS_SERVE_READY line re-navigates the webview → fresh TUI from the
+latest source. The staged sidecar binary must still EXIST (tauri validates
+externalBin), hence `stage:sidecar --if-missing`. Production uses the sidecar.
+
+Desktop UI = the REAL terminal TUI: the web shell is a fullscreen xterm.js
+connected to `serve`'s /tty WebSocket, which runs `geins` (no args → the Ink
+TUI) inside a PTY (server/pty.ts). Same bytes, same renderer as a terminal.
+On platforms without PTY support (Windows, for now) /health reports tty:false
+and the shell falls back to its older HTML login + REPL.
 ```
 
 Key invariants when extending:
@@ -76,6 +92,10 @@ Key invariants when extending:
 - **Never hardcode the version** — import `VERSION` from `src/version.ts` (reads package.json).
 - `serve` is token-gated and localhost-only; it reuses existing headless functions
   (`chatStream`, `executeGeinsCommand`, the `auth/` login flow, `loadSession`) — don't duplicate logic.
+- **node-pty under Bun**: only the native binding works (`server/pty.ts` does raw fd I/O);
+  never use node-pty's JS API. It's in `trustedDependencies` (Linux builds it via node-gyp at
+  install; the macOS prebuilds need their exec bit restored — the resolvers handle both).
+  Compiled builds embed pty.node/spawn-helper per target via scripts/build-cli.ts.
 
 ### OTA updates (both faces, one manifest)
 

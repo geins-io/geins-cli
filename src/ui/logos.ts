@@ -1,27 +1,9 @@
-// ASCII-art logos for the welcome banner, in the ANSI Shadow block style.
+// ASCII-art logo for the welcome banner, in the ANSI Shadow block style.
 // Rendered through the gradient in Welcome.tsx.
 
-export type LogoVariant = 'geins' | 'litium' | 'none';
+export type LogoVariant = 'synapse' | 'none';
 
-// "GEINS" wordmark — wrapped with PROMPT ("/") and SUFFIX ("SYNAPSE") in Welcome.
-export const LOGO_FULL = [
-'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
-' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
-' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
-' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
-' ╚██████╔╝███████╗██║██║ ╚████║███████║',
-'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
-];
-
-export const LOGO_COMPACT = [
-'  ██████╗ ███████╗██╗███╗   ██╗███████╗',
-' ██╔════╝ ██╔════╝██║████╗  ██║██╔════╝',
-' ██║  ███╗█████╗  ██║██╔██╗ ██║███████╗',
-' ██║   ██║██╔══╝  ██║██║╚██╗██║╚════██║',
-' ╚██████╔╝███████╗██║██║ ╚████║███████║',
-'  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚══════╝',
-];
-
+// "❯_" prompt flourish, leaning into the wordmark.
 export const PROMPT = [
 '██╗     ',
 '╚██╗    ',
@@ -31,41 +13,12 @@ export const PROMPT = [
 '╚═╝ ▁▁▁ ',
 ];
 
-export const SUFFIX = [
+// "SYNAPSE" wordmark — the product name, wrapped with PROMPT in Welcome.
+export const WORDMARK = [
 ' ███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗███████╗',
 '██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝',
 '███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗█████╗  ',
 '╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║██╔══╝  ',
 '███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗',
 ' ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝',
-];
-
-// Litium prefix flourish — a forward slash "/" leaning into the wordmark.
-export const LITIUM_PROMPT = [
-'    ██╗ ',
-'   ██╔╝ ',
-'  ██╔╝  ',
-' ██╔╝   ',
-'██╔╝    ',
-'╚═╝     ',
-];
-
-// "LITIUM" wordmark — rendered standalone (no prompt/suffix).
-export const LITIUM_LOGO = [
-'██╗      ██╗ ████████╗ ██╗ ██╗   ██╗ ███╗   ███╗',
-'██║      ██║ ╚══██╔══╝ ██║ ██║   ██║ ████╗ ████║',
-'██║      ██║    ██║    ██║ ██║   ██║ ██╔████╔██║',
-'██║      ██║    ██║    ██║ ██║   ██║ ██║╚██╔╝██║',
-'███████╗ ██║    ██║    ██║ ╚██████╔╝ ██║ ╚═╝ ██║',
-'╚══════╝ ╚═╝    ╚═╝    ╚═╝  ╚═════╝  ╚═╝     ╚═╝',
-];
-
-// Litium suffix flourish — "_AGENT" (baseline underscore + "AGENT") in the ANSI Shadow block style.
-export const LITIUM_SUFFIX = [
-'      █████╗  ██████╗ ███████╗███╗   ██╗████████╗',
-'     ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝',
-'     ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ',
-'     ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ',
-'     ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ',
-'▁▁▁▁ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ',
 ];

@@ -9,10 +9,12 @@
  *
  * Usage:
  *   bun run scripts/stage-sidecar.ts                       # host triple
+ *   bun run scripts/stage-sidecar.ts --if-missing          # skip if already staged (dev)
  *   bun run scripts/stage-sidecar.ts --triple x86_64-pc-windows-msvc --bun-target bun-windows-x64
  */
 import { $ } from 'bun';
 import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { rename, mkdir } from 'node:fs/promises';
 
 function flag(name: string): string | undefined {
@@ -35,6 +37,14 @@ const root = resolve(import.meta.dir, '..');
 await mkdir(resolve(root, 'src-tauri/binaries'), { recursive: true });
 const tmpOut = resolve(root, 'src-tauri/binaries/geins-staging');
 const finalOut = resolve(root, `src-tauri/binaries/geins-${triple}${isWindows ? '.exe' : ''}`);
+
+// Dev fast path: `tauri dev` only VALIDATES that the externalBin file exists —
+// the dev backend runs from source (bun --watch, see src-tauri/src/lib.rs) and
+// never executes this binary, so staleness doesn't matter.
+if (process.argv.includes('--if-missing') && existsSync(finalOut)) {
+  console.log(`✓ sidecar already staged (--if-missing) → src-tauri/binaries/geins-${triple}${isWindows ? '.exe' : ''}`);
+  process.exit(0);
+}
 
 const buildArgs = ['run', 'scripts/build-cli.ts', '--outfile', tmpOut];
 if (bunTarget) buildArgs.push('--target', bunTarget);

@@ -11,17 +11,22 @@
 //
 // All real work is delegated to the existing headless functions (login flow,
 // copilot stream, subcommand runner) — this file only wires HTTP/WS to them.
+import { homedir } from 'node:os';
 import { login, verify, fetchUser, type AuthResponse } from '../auth/login.ts';
 import { loadSession, saveSession, clearSession, parseJwtExp } from '../auth/session.ts';
 import { chatStream } from '../commands/copilot.ts';
 import { executeGeinsCommand } from '../commands/copilot.ts';
 import { WEB_SHELL_HTML } from './web-shell.ts';
+import { spawnPty, ptyAvailable, type PtyProcess } from './pty.ts';
+import { selfInvocation } from '../runtime.ts';
 import { VERSION } from '../version.ts';
 
 interface ServeOptions {
   port: number;
   token: string;
   host: string;
+  /** Desktop mode: a clean TUI exit (ctrl-c, /exit) exits this server too, which closes the app. */
+  exitOnTtyEnd: boolean;
 }
 
 function parseServeArgs(args: string[]): ServeOptions {
@@ -32,7 +37,12 @@ function parseServeArgs(args: string[]): ServeOptions {
   const port = Number(get('port') ?? process.env['GEINS_SERVE_PORT'] ?? '0');
   const token = get('token') ?? process.env['GEINS_SERVE_TOKEN'] ?? '';
   const host = get('host') ?? '127.0.0.1';
-  return { port: Number.isFinite(port) ? port : 0, token, host };
+  return {
+    port: Number.isFinite(port) ? port : 0,
+    token,
+    host,
+    exitOnTtyEnd: args.includes('--exit-on-tty-end'),
+  };
 }
 
 // Short-lived store for auth that's mid-flow (awaiting MFA code or account pick).
@@ -45,6 +55,56 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+// Per-connection WebSocket state, set at upgrade time.
+type WsData =
+  | { kind: 'copilot' }
+  | { kind: 'tty'; cols: number; rows: number; pty?: PtyProcess; earlyInput: string[]; closed?: boolean };
+
+/**
+ * Spawn the real Ink TUI (this same binary, no args) in a PTY for one /tty
+ * connection. Raw PTY bytes stream to the client as binary frames; the client
+ * sends JSON text frames: {t:'i',d} input · {t:'r',cols,rows} resize.
+ * The desktop shell renders this with xterm.js — the exact terminal experience.
+ */
+async function startTty(ws: Bun.ServerWebSocket<WsData>, exitOnTtyEnd: boolean): Promise<void> {
+  const data = ws.data;
+  if (data.kind !== 'tty') return;
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  env['TERM'] = 'xterm-256color';
+  env['COLORTERM'] = 'truecolor';
+  if (!env['LANG']) env['LANG'] = 'en_US.UTF-8'; // app launches (Finder) have no locale set
+  const pty = await spawnPty({
+    argv: selfInvocation(), // no args → the TUI
+    cols: data.cols,
+    rows: data.rows,
+    cwd: homedir(),
+    env,
+    onData: (chunk) => { if (!data.closed) ws.send(chunk); },
+    onExit: (exitCode) => {
+      data.pty = undefined;
+      // The user quit the TUI itself (ctrl-c, /exit) while the window was attached:
+      // in desktop mode that means "quit the app" — exit; the Tauri host watches the
+      // sidecar and closes the window when it dies. NOT taken when `closed` (the ws
+      // dropped first — reload/reconnect — where WE killed the TUI via SIGHUP), and
+      // not on crashes (nonzero exit keeps the relaunch screen so the user sees it).
+      if (exitOnTtyEnd && !data.closed && exitCode === 0) process.exit(0);
+      if (data.closed) return;
+      ws.send(JSON.stringify({ t: 'exit', code: exitCode }));
+      ws.close();
+    },
+  });
+  if (!pty) {
+    ws.send(JSON.stringify({ t: 'error', message: 'PTY not available on this platform' }));
+    ws.close();
+    return;
+  }
+  if (data.closed) { pty.kill(); return; }
+  data.pty = pty;
+  // Flush keystrokes that arrived while the TUI was spawning.
+  for (const d of data.earlyInput.splice(0)) pty.write(d);
 }
 
 /** Finalize a successful auth: pick the account, fetch the user, persist the session. */
@@ -74,12 +134,15 @@ async function finalizeLogin(auth: AuthResponse, accountKey?: string) {
 
 /**
  * When run as a desktop sidecar (`--watch-parent`), self-exit if the parent
- * process dies. The OS reparents orphans to PID 1, so a PPID of 1 (when it
- * didn't start as 1) means our launcher is gone — guarantees no orphaned server
- * even on a hard kill that skips the app's normal shutdown.
+ * process dies. The OS reparents orphans to PID 1, so a PPID of 1 means our
+ * launcher is gone — guarantees no orphaned server even on a hard kill that
+ * skips the app's normal shutdown.
+ *
+ * No "already 1 at startup" early-return: if the launcher crashes during its
+ * own startup (e.g. mid `did_finish_launching`), we may be orphaned before
+ * this first runs — that case must ALSO exit, the first tick handles it.
  */
 function watchParent(): void {
-  if (process.ppid === 1) return; // started detached already — nothing to watch
   const timer = setInterval(() => {
     if (process.ppid === 1) {
       clearInterval(timer);
@@ -90,7 +153,7 @@ function watchParent(): void {
 }
 
 export async function serveCommand(args: string[]): Promise<void> {
-  const { port, token, host } = parseServeArgs(args);
+  const { port, token, host, exitOnTtyEnd } = parseServeArgs(args);
   if (args.includes('--watch-parent')) watchParent();
 
   const authorized = (req: Request): boolean => {
@@ -101,19 +164,30 @@ export async function serveCommand(args: string[]): Promise<void> {
     return url.searchParams.get('token') === token;
   };
 
-  const server = Bun.serve({
+  const server = Bun.serve<WsData>({
     port,
     hostname: host,
     async fetch(req, srv) {
       const url = new URL(req.url);
       const path = url.pathname;
 
-      if (path === '/health') return jsonResponse({ ok: true, version: VERSION });
+      if (path === '/health') return jsonResponse({ ok: true, version: VERSION, tty: await ptyAvailable() });
 
       // WebSocket upgrade for streaming copilot turns.
       if (path === '/copilot') {
         if (!authorized(req)) return new Response('Unauthorized', { status: 401 });
-        if (srv.upgrade(req)) return undefined as unknown as Response;
+        if (srv.upgrade(req, { data: { kind: 'copilot' } satisfies WsData })) return undefined as unknown as Response;
+        return new Response('Expected WebSocket', { status: 426 });
+      }
+
+      // WebSocket upgrade for the desktop terminal: the TUI over a PTY.
+      if (path === '/tty') {
+        if (!authorized(req)) return new Response('Unauthorized', { status: 401 });
+        if (!(await ptyAvailable())) return jsonResponse({ error: 'tty not supported on this platform' }, 501);
+        const cols = Number(url.searchParams.get('cols') ?? '80') || 80;
+        const rows = Number(url.searchParams.get('rows') ?? '24') || 24;
+        const data: WsData = { kind: 'tty', cols, rows, earlyInput: [] };
+        if (srv.upgrade(req, { data })) return undefined as unknown as Response;
         return new Response('Expected WebSocket', { status: 426 });
       }
 
@@ -194,7 +268,30 @@ export async function serveCommand(args: string[]): Promise<void> {
       return jsonResponse({ error: 'not found' }, 404);
     },
     websocket: {
+      open(ws) {
+        if (ws.data?.kind === 'tty') void startTty(ws, exitOnTtyEnd);
+      },
       async message(ws, raw) {
+        const data = ws.data;
+
+        if (data?.kind === 'tty') {
+          let msg: { t?: string; d?: string; cols?: number; rows?: number };
+          try {
+            msg = JSON.parse(String(raw));
+          } catch {
+            return;
+          }
+          if (msg.t === 'i' && typeof msg.d === 'string') {
+            if (data.pty) data.pty.write(msg.d);
+            else data.earlyInput.push(msg.d); // TUI still spawning
+          } else if (msg.t === 'r' && msg.cols && msg.rows) {
+            data.cols = msg.cols;
+            data.rows = msg.rows;
+            data.pty?.resize(msg.cols, msg.rows);
+          }
+          return;
+        }
+
         let prompt = '';
         try {
           const msg = JSON.parse(String(raw)) as { prompt?: string };
@@ -213,6 +310,14 @@ export async function serveCommand(args: string[]): Promise<void> {
           ws.send(JSON.stringify({ kind: 'done' }));
         } catch (err) {
           ws.send(JSON.stringify({ kind: 'error', text: String((err as Error).message ?? err) }));
+        }
+      },
+      close(ws) {
+        const data = ws.data;
+        if (data?.kind === 'tty') {
+          data.closed = true;
+          data.pty?.kill(); // window gone → hang up the TUI
+          data.pty = undefined;
         }
       },
     },

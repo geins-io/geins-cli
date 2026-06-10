@@ -22,7 +22,7 @@ import { setWorking } from '../output/title.ts';
 import { loadSession } from '../auth/session.ts';
 import { fetchUser, type AuthResponse } from '../auth/login.ts';
 import { request, resetSessionCache } from '../api/client.ts';
-import { getApiUrl, getLogo, getLogoPrefix, getLogoSuffix, getLogoWordmark, getName } from '../config/env.ts';
+import { getApiUrl, getLogo, getLogoPrefix, getName } from '../config/env.ts';
 import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
@@ -2468,8 +2468,6 @@ export function App({ version = VERSION }: { version?: string }) {
         authState={appState.status.authState}
         logo={getLogo()}
         prefix={getLogoPrefix()}
-        suffix={getLogoSuffix()}
-        wordmark={getLogoWordmark()}
         name={getName()}
       />
     ),

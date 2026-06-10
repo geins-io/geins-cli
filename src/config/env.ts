@@ -24,14 +24,13 @@ export function getName(): string {
 }
 
 /**
- * Welcome banner logo variant. Set BRAND_LOGO=litium to switch wordmark, or BRAND_LOGO=none
- * (alias "text") to hide the ASCII banner entirely and show just the text name. Defaults to geins.
+ * Welcome banner logo. Set BRAND_LOGO=none (alias "text") to hide the ASCII banner entirely
+ * and show just the text name. Defaults to the SYNAPSE wordmark.
  */
 export function getLogo(): LogoVariant {
   const v = process.env['BRAND_LOGO'];
-  if (v === 'litium') return 'litium';
   if (v === 'none' || v === 'text') return 'none';
-  return 'geins';
+  return 'synapse';
 }
 
 function envBool(name: string, fallback: boolean): boolean {
@@ -40,22 +39,9 @@ function envBool(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(v.trim());
 }
 
-/** Show the prefix flourish before the logo. Set BRAND_PREFIX=false to hide; defaults to true. */
+/** Show the "❯_" prompt flourish before the wordmark. Set BRAND_PREFIX=false to hide; defaults to true. */
 export function getLogoPrefix(): boolean {
   return envBool('BRAND_PREFIX', true);
-}
-
-/**
- * Show the central wordmark ("GEINS"/"LITIUM" art). Set BRAND_WORDMARK=false to keep only the
- * prefix + suffix flourishes; defaults to true.
- */
-export function getLogoWordmark(): boolean {
-  return envBool('BRAND_WORDMARK', true);
-}
-
-/** Show the "SYNAPSE" flourish after the logo. Set BRAND_SUFIX=false to hide; defaults to true. */
-export function getLogoSuffix(): boolean {
-  return envBool('BRAND_SUFIX', true);
 }
 
 export const isInteractive = process.stdin.isTTY ?? false;
