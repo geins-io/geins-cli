@@ -11,6 +11,14 @@ const PROVIDER_META: Record<string, { icon: string; desc: string }> = {
   lms: { icon: '□', desc: 'Local models via LM Studio' },
 };
 
+// One-line hints for the Claude Code tier picker (static `models` list on the option).
+const MODEL_HINTS: Record<string, string> = {
+  auto: 'route each ask to the cheapest sufficient model (recommended)',
+  haiku: 'fastest & cheapest — simple lookups',
+  sonnet: 'balanced speed and capability',
+  opus: 'most capable — complex multi-step work',
+};
+
 interface SelectCopilotProps {
   onComplete: (option: CopilotOption) => void;
   onCancel: () => void;
@@ -28,6 +36,11 @@ export function SelectCopilot({ onComplete, onCancel, onLog }: SelectCopilotProp
 
   useEffect(() => {
     if (!pendingOption) return;
+    // Providers with a static tier list (claude) skip the probe; ollama is probed.
+    if (pendingOption.models) {
+      setModels(pendingOption.models);
+      return;
+    }
     listOllamaModels().then(m => setModels(m));
   }, [pendingOption]);
 
@@ -117,10 +130,12 @@ export function SelectCopilot({ onComplete, onCancel, onLog }: SelectCopilotProp
         <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
           {models.map((m, i) => {
             const selected = i === modelIndex;
+            const hint = pendingOption.models ? MODEL_HINTS[m] : undefined;
             return (
               <Box key={m} gap={1}>
                 <Text color={selected ? 'cyan' : 'gray'}>{selected ? '▸' : ' '}</Text>
                 <Text color={selected ? 'white' : 'gray'} bold={selected}>{m}</Text>
+                {hint ? <Text dimColor>{hint}</Text> : null}
               </Box>
             );
           })}

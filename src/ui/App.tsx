@@ -465,7 +465,9 @@ export function App({ version = VERSION }: { version?: string }) {
       const attachmentSection = buildAttachmentSection(attachments);
       const copilotMessage = attachmentSection ? `${attachmentSection}\n\n${trimmed}` : trimmed;
       const copilotCfg = await getCopilotConfig();
-      const providerLabel = copilotCfg
+      // Mutable: in auto mode the router picks a tier per ask, surfaced via a 'model'
+      // stream event — the header updates from "· auto" to the actual tier (e.g. "· haiku").
+      let providerLabel = copilotCfg
         ? copilotCfg.model ? `${copilotCfg.command} · ${copilotCfg.model}` : copilotCfg.command
         : 'copilot';
       try {
@@ -510,6 +512,10 @@ export function App({ version = VERSION }: { version?: string }) {
             // first. Parallel calls completing out of order can mismark a sibling — cosmetic.
             const first = activityLog.find(e => e.kind === 'tool' && !e.done);
             if (first) first.done = true;
+            renderActivity();
+          } else if (event.kind === 'model') {
+            // Auto-routed tier for this ask — reflect it in the header.
+            providerLabel = `${copilotCfg?.command ?? 'copilot'} · ${event.label}`;
             renderActivity();
           } else if (event.kind === 'text') {
             // text events update the final answer — handled by onChunk
@@ -648,6 +654,9 @@ export function App({ version = VERSION }: { version?: string }) {
                   renderFollowup();
                 }
               },
+              // Mid-task tool-result round: keep the tier the task was routed to —
+              // don't re-route on tool output.
+              { continuation: true },
             );
             // Keep bash blocks here — `pending` is scanned for the next round's commands.
             const followupCleaned = followupRaw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();

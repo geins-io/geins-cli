@@ -37,6 +37,7 @@ src/
   commands/            # one file per command group — the API functions live here
     help-text.ts       # ★ single source of truth for command docs + copilot catalog + PITFALLS
     update.ts          # `geins update` — CLI self-update (OTA) from the GitHub Releases manifest
+    model-router.ts    # copilot auto mode: routes each ask to the cheapest sufficient Claude tier (haiku/sonnet/opus)
     products.ts order.ts campaigns.ts merchant.ts account.ts workflows.ts copilot.ts ...
   ui/                  # Ink TUI components
   output/              # terminal formatting (colors, banner, json)

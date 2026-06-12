@@ -3,6 +3,7 @@ import { getOutputDir, getAccountOutputDir, ensureOutputDir } from '../output/si
 import { existsSync, statSync } from 'node:fs';
 import { getActiveSignal } from '../api/abort.ts';
 import { buildCommandCatalog, PITFALLS } from './help-text.ts';
+import { routeClaudeModel, type ClaudeModelAlias } from './model-router.ts';
 import { selfInvocation } from '../runtime.ts';
 import { $ } from 'bun';
 import {
@@ -29,6 +30,8 @@ export interface CopilotOption {
   cli: string;
   testCmd: string[];
   supportsModels?: boolean;
+  /** Static model choices for the picker (claude tiers). Without it, models are probed (ollama). */
+  models?: string[];
   supportsStreamJson?: boolean;
   /** The CLI keeps its own resumable session (e.g. `claude --resume <id>`), so we send only the
    *  new message each turn instead of replaying the whole system+history prompt. */
@@ -39,7 +42,7 @@ export interface CopilotOption {
 }
 
 export interface StreamEvent {
-  kind: 'tool_start' | 'tool_end' | 'text';
+  kind: 'tool_start' | 'tool_end' | 'text' | 'model';
   toolName?: string;
   label?: string;
   text?: string;
@@ -53,8 +56,19 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     contextWindow: 200000,
     supportsStreamJson: true,
     supportsResume: true,
+    supportsModels: true,
+    // 'auto' (default) routes each ask to the cheapest sufficient tier — see model-router.ts.
+    models: ['auto', 'haiku', 'sonnet', 'opus'],
     useStdin: true,
-    buildCmd: () => ['claude', '-p', '--output-format', 'stream-json', '--verbose'],
+    buildCmd: (model) => {
+      const cmd = ['claude', '-p', '--output-format', 'stream-json', '--verbose'];
+      if (model && model !== 'auto') {
+        cmd.push('--model', model);
+        // If the chosen tier is overloaded/unavailable, degrade to sonnet instead of failing the turn.
+        if (model !== 'sonnet') cmd.push('--fallback-model', 'sonnet');
+      }
+      return cmd;
+    },
   },
   {
     name: 'OpenAI Codex',
@@ -105,6 +119,14 @@ export interface ChatMessage {
 let resumeSessionId: string | undefined;
 
 /**
+ * The Claude tier the current task was routed to (auto mode). Continuation turns —
+ * tool results fed back mid-task by the agentic loop — reuse it instead of re-routing
+ * on tool output (whose length/wording says nothing about the task's difficulty).
+ * Cleared with the conversation.
+ */
+let routedModel: ClaudeModelAlias | undefined;
+
+/**
  * True once a real chat turn in this process has carried the SESSION START orientation
  * (run `geins help` first). Flipped by the chat paths — NOT inside buildFullPrompt — so
  * getContextUsageAsync's display-only prompt rebuild never consumes it. Rolling history
@@ -114,7 +136,27 @@ let sessionOriented = false;
 
 export function clearConversationHistory(): void {
   resumeSessionId = undefined;
+  routedModel = undefined;
   clearHistory();
+}
+
+/**
+ * Resolve the model for THIS turn. Claude Code in auto mode (no model picked, or 'auto')
+ * routes each user ask to the cheapest sufficient tier to save tokens; a pinned model
+ * always wins; other providers keep their configured model. `routed` is set only when
+ * the router made a fresh decision (so the UI can surface it).
+ */
+function resolveTurnModel(
+  config: CopilotConfig,
+  prompt: string,
+  continuation = false,
+): { model?: string; routed?: { model: ClaudeModelAlias; reason: string } } {
+  if (config.cli !== 'claude') return { model: config.model };
+  if (config.model && config.model !== 'auto') return { model: config.model };
+  if (continuation && routedModel) return { model: routedModel };
+  const route = routeClaudeModel(prompt);
+  routedModel = route.model;
+  return { model: route.model, routed: route };
 }
 
 function estimateTokens(text: string): number {
@@ -445,14 +487,15 @@ export async function chat(prompt: string): Promise<string> {
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
   const isStreamJson = option.supportsStreamJson;
-  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
+  const turn = resolveTurnModel(config, prompt);
+  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: turn.model });
   // Always include conversation history: each copilot invocation is a stateless
   // one-shot spawn (e.g. `claude -p`), so prior turns and tool results only reach
   // the model if they're in the prompt. Omitting them broke multi-step flows where
   // a follow-up references "the command results" / "my original question".
   const fullPrompt = await buildFullPrompt(prompt, option);
   sessionOriented = true;
-  const cmd = option.buildCmd(config.model);
+  const cmd = option.buildCmd(turn.model);
 
   const proc = Bun.spawn(cmd, {
     stdout: 'pipe',
@@ -473,7 +516,7 @@ export async function chat(prompt: string): Promise<string> {
   }
 
   const cleaned = isStreamJson ? extractResultFromStreamJson(output) : output.trim();
-  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
+  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: turn.model });
   await processMemoryBlocks(cleaned);
   return cleaned;
 }
@@ -574,6 +617,7 @@ export async function chatStream(
   prompt: string,
   onChunk: (text: string) => void,
   onEvent?: (event: StreamEvent) => void,
+  opts?: { continuation?: boolean },
 ): Promise<string> {
   const config = await getCopilotConfig();
   if (!config) throw new Error('No copilot configured. Run /copilot to set one up.');
@@ -581,7 +625,11 @@ export async function chatStream(
   const option = getCopilotOption(config.cli);
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
-  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: config.model });
+  const turn = resolveTurnModel(config, prompt, opts?.continuation);
+  // Surface the routing decision so the UI can show which tier is handling the turn.
+  if (turn.routed) onEvent?.({ kind: 'model', label: turn.routed.model });
+
+  await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: turn.model });
   const isStreamJson = option.supportsStreamJson;
   const canResume = !!option.supportsResume && isStreamJson;
 
@@ -594,7 +642,7 @@ export async function chatStream(
   ): Promise<{ buffer: string; sessionId?: string; exitCode: number; readStderr: () => Promise<string> }> => {
     const fullPrompt = resumeId ? prompt : await buildFullPrompt(prompt, option);
     if (!resumeId) sessionOriented = true;
-    const cmd = option.buildCmd(config.model);
+    const cmd = option.buildCmd(turn.model);
     if (resumeId) cmd.push('--resume', resumeId);
 
     const proc = Bun.spawn(cmd, {
@@ -706,7 +754,7 @@ export async function chatStream(
   if (canResume && res.sessionId) resumeSessionId = res.sessionId;
 
   const cleaned = res.buffer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: config.model });
+  await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: turn.model });
   await processMemoryBlocks(cleaned);
   return res.buffer;
 }
