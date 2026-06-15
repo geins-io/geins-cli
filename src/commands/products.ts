@@ -312,11 +312,12 @@ export async function queryProducts(
   query: ProductQuery = {},
   options?: { include?: string; page?: number },
 ): Promise<QueryProductsResult> {
-  const page = options?.page;
-  // The paged endpoint returns PageResult (incl. BatchId); the plain endpoint returns
-  // every match in one array with no paging info. Pages beyond 1 need BatchId in the body.
-  const path = page != null ? `/API/Product/Query/${page}` : '/API/Product/Query';
-  const envelope = await mgmtRequest<PagedEnvelope<Product[]>>(path, {
+  // Always use the documented paged endpoint — POST /API/Product/Query/{page}, page 1 to start a
+  // batch (https://docs.geins.io/docs/api/management/query-products-paged). The non-paged
+  // /API/Product/Query is intentionally NOT used: it has no PageResult/BatchId, so callers can't
+  // page reliably. Pages beyond 1 must carry the BatchId from page 1's PageResult (in the body).
+  const page = options?.page ?? 1;
+  const envelope = await mgmtRequest<PagedEnvelope<Product[]>>(`/API/Product/Query/${page}`, {
     method: 'POST',
     body: query,
     query: { include: options?.include ?? 'Names' },
@@ -324,11 +325,39 @@ export async function queryProducts(
   return { products: envelope.Resource ?? [], page: envelope.PageResult };
 }
 
+/**
+ * Fetch the FULL result set across all pages. Page 1 starts a batch (the API returns its BatchId in
+ * PageResult); every later page replays that BatchId in the body — done automatically here, so no
+ * manual `--batch` threading. Loops while HasMoreRows (bounded by PageCount and a hard safety cap).
+ */
+export async function queryAllProducts(
+  query: ProductQuery = {},
+  options?: { include?: string; maxPages?: number },
+): Promise<QueryProductsResult> {
+  const HARD_CAP = options?.maxPages ?? 1000; // backstop against a never-terminating HasMoreRows
+  const products: Product[] = [];
+  let batchId = query.BatchId;
+  let lastPage: PageResult | undefined;
+  for (let page = 1; page <= HARD_CAP; page++) {
+    const res = await queryProducts({ ...query, BatchId: batchId }, { include: options?.include, page });
+    products.push(...res.products);
+    lastPage = res.page;
+    // Carry the batch forward; the API mints it on page 1 and expects it back on every later page.
+    batchId = res.page?.BatchId ?? batchId;
+    const more = res.page?.HasMoreRows === true
+      && (res.page?.PageCount === undefined || page < res.page.PageCount);
+    if (!more) break;
+  }
+  return { products, page: lastPage };
+}
+
 export interface ProductListArgs {
   query: ProductQuery;
   page?: number;
   include?: string;
   json: boolean;
+  /** Page through the whole result set (auto-carrying BatchId) instead of one page. */
+  all: boolean;
 }
 
 /** Parse `product list` flags into a query + options, shared by the TUI and direct CLI. */
@@ -337,6 +366,7 @@ export function parseProductListArgs(args: string[]): ProductListArgs {
   let page: number | undefined;
   let include: string | undefined;
   let json = false;
+  let all = false;
 
   const num = (s?: string): number | undefined =>
     s != null && s.trim() !== '' && !Number.isNaN(Number(s)) ? Number(s) : undefined;
@@ -355,11 +385,12 @@ export function parseProductListArgs(args: string[]): ProductListArgs {
       case '--page': page = num(args[++i]); break;
       case '--batch': { const v = args[++i]; if (v) query.BatchId = v; break; }
       case '--include': include = args[++i]; break;
+      case '--all': all = true; break;
       case '--json': json = true; break;
     }
   }
 
-  return { query, page, include, json };
+  return { query, page, include, json, all };
 }
 
 /** Best-effort display name for a product, falling back to its article number. */

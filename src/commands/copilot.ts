@@ -1,9 +1,9 @@
 import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
-import { getOutputDir, getAccountOutputDir, ensureOutputDir } from '../output/sink.ts';
+import { getOutputDir, getAccountOutputDir, ensureOutputDir, recordCliFailure } from '../output/sink.ts';
 import { existsSync, statSync } from 'node:fs';
 import { getActiveSignal } from '../api/abort.ts';
 import { buildCommandCatalog, PITFALLS } from './help-text.ts';
-import { routeClaudeModel, type ClaudeModelAlias } from './model-router.ts';
+import { routeClaudeModel, routeAgyModel, routeCodexModel, AGY_MODELS, SMART_CANDIDATES, type SmartCandidates } from './model-router.ts';
 import { selfInvocation } from '../runtime.ts';
 import { $ } from 'bun';
 import {
@@ -30,8 +30,19 @@ export interface CopilotOption {
   cli: string;
   testCmd: string[];
   supportsModels?: boolean;
-  /** Static model choices for the picker (claude tiers). Without it, models are probed (ollama). */
+  /** Static model choices for the picker (claude/agy tiers). When `probeModels` is set this is only
+   *  the fallback used if the probe returns nothing. */
   models?: string[];
+  /** Probe the installed CLI for its real models at picker-open (codex, ollama) instead of a static
+   *  list — keeps the menu account-correct. Returns [] on any failure (→ falls back to `models`). */
+  probeModels?: () => Promise<string[]>;
+  /** Meta entries prepended to a probed list (codex: 'auto'/'auto-smart' routing sentinels, which
+   *  aren't real model ids the probe returns). */
+  metaModels?: string[];
+  /** Optional second selection axis (codex: reasoning effort). When set, the picker asks for a
+   *  `models` entry first, then one of these, and the saved model is the combined "<model>:<axis>"
+   *  token — which `buildCmd` splits back apart. */
+  effortChoices?: string[];
   supportsStreamJson?: boolean;
   /** The CLI keeps its own resumable session (e.g. `claude --resume <id>`), so we send only the
    *  new message each turn instead of replaying the whole system+history prompt. */
@@ -57,8 +68,9 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     supportsStreamJson: true,
     supportsResume: true,
     supportsModels: true,
-    // 'auto' (default) routes each ask to the cheapest sufficient tier — see model-router.ts.
-    models: ['auto', 'haiku', 'sonnet', 'opus'],
+    // 'auto' (default) routes each ask to the cheapest sufficient tier (instant regex); 'auto-smart'
+    // has a cheap model pick the tier per ask instead — see model-router.ts / resolveTurnModel.
+    models: ['auto', 'auto-smart', 'haiku', 'sonnet', 'opus'],
     useStdin: true,
     buildCmd: (model) => {
       const cmd = ['claude', '-p', '--output-format', 'stream-json', '--verbose'];
@@ -76,21 +88,57 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     testCmd: ['codex', '--version'],
     contextWindow: 128000,
     useStdin: true,
-    buildCmd: () => ['codex', 'exec', '--ephemeral', '--skip-git-repo-check', '-'],
+    supportsModels: true,
+    // Two-axis pick: a model id (passed via `-m`) then a reasoning effort (passed via
+    // `-c model_reasoning_effort=`). The saved choice is the combined "<model>:<effort>" token.
+    // The model list is probed live from `codex debug models` (visibility:list) so it's exactly what
+    // the signed-in account supports — a ChatGPT account shows the gpt-5.x family (no gpt-5-codex,
+    // which needs API-key auth). The 'auto'/'auto-smart' routing sentinels are prepended via
+    // metaModels; `models` below is only the fallback if the probe fails. Valid efforts: low/medium/high/xhigh.
+    metaModels: ['auto', 'auto-smart'],
+    probeModels: listCodexModels,
+    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'],
+    effortChoices: ['low', 'medium', 'high', 'xhigh'],
+    buildCmd: (model) => {
+      const cmd = ['codex', 'exec', '--ephemeral', '--skip-git-repo-check'];
+      if (model) {
+        const [id, effort] = model.split(':');
+        if (id) cmd.push('-m', id);
+        if (effort) cmd.push('-c', `model_reasoning_effort=${effort}`);
+      }
+      cmd.push('-');
+      return cmd;
+    },
   },
   {
-    name: 'Google Gemini CLI',
-    cli: 'gemini',
-    testCmd: ['gemini', '--version'],
+    name: 'Antigravity CLI',
+    cli: 'agy',
+    testCmd: ['agy', '--version'],
     contextWindow: 1000000,
+    supportsModels: true,
+    // Static model list, exactly like Claude: 'auto' per-ask routes to the cheapest sufficient
+    // tier (instant regex), 'auto-smart' has a cheap model make that pick, or pin any model.
+    // AGY_MODELS are the verbatim `agy models` ids.
+    models: ['auto', 'auto-smart', ...AGY_MODELS],
     useStdin: true,
-    buildCmd: () => ['gemini', '-p', ''],
+    // Headless "command mode" is `agy --print` (alias -p); the prompt arrives via stdin (we pipe
+    // fullPrompt). `--model` pins the model (agy has no `-m` short alias); in auto mode
+    // resolveTurnModel hands us the routed id, so the 'auto'/'auto-smart' sentinels never reach the flag.
+    // See https://antigravity.google/docs/cli-using
+    buildCmd: (model) => {
+      const cmd = ['agy'];
+      if (model && model !== 'auto' && model !== 'auto-smart') cmd.push('--model', model);
+      cmd.push('-p', '');
+      return cmd;
+    },
   },
   {
     name: 'Ollama',
     cli: 'ollama',
     testCmd: ['ollama', '--version'],
     supportsModels: true,
+    // No static list / no meta entries — the picker shows exactly the locally pulled models.
+    probeModels: listOllamaModels,
     contextWindow: 8000,
     useStdin: true,
     buildCmd: (model) => ['ollama', 'run', model ?? 'llama3.2'],
@@ -124,7 +172,7 @@ let resumeSessionId: string | undefined;
  * on tool output (whose length/wording says nothing about the task's difficulty).
  * Cleared with the conversation.
  */
-let routedModel: ClaudeModelAlias | undefined;
+let routedModel: string | undefined;
 
 /**
  * True once a real chat turn in this process has carried the SESSION START orientation
@@ -140,21 +188,122 @@ export function clearConversationHistory(): void {
   clearHistory();
 }
 
+/** The cheapest one-shot invocation of a provider, used to RUN the 'auto-smart' classification.
+ *  Plain text out (no stream-json), prompt over stdin, no session/resume so it never pollutes the
+ *  conversation. Returns null for providers without a smart menu. */
+function smartClassifyCmd(cli: string): string[] | null {
+  const cheapest = SMART_CANDIDATES[cli]?.models[0];
+  if (!cheapest) return null;
+  switch (cli) {
+    case 'claude': return ['claude', '-p', '--model', cheapest];
+    case 'codex': return ['codex', 'exec', '--ephemeral', '--skip-git-repo-check', '-m', cheapest, '-c', 'model_reasoning_effort=low', '-'];
+    case 'agy': return ['agy', '--model', cheapest, '-p', ''];
+    default: return null;
+  }
+}
+
+/** The prompt handed to the cheap classifier: pick one on-menu model (+ effort) and reply JSON only. */
+function buildSmartPrompt(cand: SmartCandidates, userPrompt: string): string {
+  // Cap the ask so a huge dropped-file preview doesn't make the (cheap) classification slow/costly —
+  // the opening lines carry more than enough signal to route.
+  const ask = userPrompt.length > 4000 ? `${userPrompt.slice(0, 4000)}\n…[truncated]` : userPrompt;
+  const effortLine = cand.efforts ? `\nAllowed "effort" values: ${cand.efforts.join(', ')}.` : '';
+  const effortField = cand.efforts ? `, "effort": "<one of the allowed efforts>"` : '';
+  return [
+    'You are a fast model-routing classifier. Choose the best option for the request below.',
+    `Allowed "model" values (cheapest → most capable): ${cand.models.join(', ')}.${effortLine}`,
+    'Use the most capable / coding-oriented model for coding, scripting, debugging, multi-step data or catalog automation, and file processing.',
+    'Use the cheapest model for simple lookups, counts, status checks, and chit-chat. Scale capability/effort to the difficulty of the task.',
+    `Reply with ONLY a compact JSON object and nothing else: {"model": "<one of the allowed models>"${effortField}}.`,
+    '',
+    'Request:',
+    ask,
+  ].join('\n');
+}
+
+/** Parse + validate the classifier's reply against the menu. Off-menu / unparseable → null (the
+ *  caller then falls back to the instant regex router). codex answers carry a separate effort axis
+ *  that we fold back into the "<model>:<effort>" token. */
+function parseSmartChoice(out: string, cand: SmartCandidates, cli: string): { model: string; reason: string } | null {
+  const match = out.match(/\{[^{}]*\}/);
+  if (!match) return null;
+  let obj: { model?: unknown; effort?: unknown };
+  try { obj = JSON.parse(match[0]); } catch { return null; }
+  const model = typeof obj.model === 'string' ? obj.model : '';
+  if (!cand.models.includes(model)) return null;
+  if (cli === 'codex' && cand.efforts) {
+    const effort = typeof obj.effort === 'string' && cand.efforts.includes(obj.effort) ? obj.effort : 'medium';
+    return { model: `${model}:${effort}`, reason: 'smart' };
+  }
+  return { model, reason: 'smart' };
+}
+
+/** 'auto-smart': spawn the cheapest model to pick the model (+ effort) for this ask. Returns null on
+ *  any failure (spawn error, non-zero exit, off-menu reply, cancel) so the caller falls back to regex. */
+async function classifySmart(cli: string, prompt: string): Promise<{ model: string; reason: string } | null> {
+  const cand = SMART_CANDIDATES[cli];
+  const cmd = smartClassifyCmd(cli);
+  if (!cand || !cmd) return null;
+  try {
+    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', ...(await copilotProcOptions()) });
+    proc.stdin.write(buildSmartPrompt(cand, prompt));
+    proc.stdin.end();
+    const signal = getActiveSignal();
+    const onAbort = () => { try { proc.kill(); } catch { /* already gone */ } };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    }
+    const out = await new Response(proc.stdout).text();
+    if (await proc.exited !== 0 || signal?.aborted) return null;
+    return parseSmartChoice(out, cand, cli);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Resolve the model for THIS turn. Claude Code in auto mode (no model picked, or 'auto')
- * routes each user ask to the cheapest sufficient tier to save tokens; a pinned model
- * always wins; other providers keep their configured model. `routed` is set only when
- * the router made a fresh decision (so the UI can surface it).
+ * Resolve the model for THIS turn. Claude Code, Antigravity, and Codex in auto mode route each user
+ * ask: 'auto' uses the instant regex router (cheapest sufficient tier, zero latency); 'auto-smart'
+ * spawns the provider's cheapest model to make the pick (smarter, one extra round-trip). A pinned
+ * model always wins; non-routed providers keep their configured model. `routed` is set only when a
+ * fresh decision was made (so the UI can surface it). Continuation turns (tool results fed back
+ * mid-task) reuse the prior decision — tool output says nothing about the task's difficulty.
  */
-function resolveTurnModel(
+async function resolveTurnModel(
   config: CopilotConfig,
   prompt: string,
   continuation = false,
-): { model?: string; routed?: { model: ClaudeModelAlias; reason: string } } {
-  if (config.cli !== 'claude') return { model: config.model };
-  if (config.model && config.model !== 'auto') return { model: config.model };
+): Promise<{ model?: string; routed?: { model: string; reason: string } }> {
+  const routes = config.cli === 'claude' || config.cli === 'agy' || config.cli === 'codex';
+  if (!routes) return { model: config.model };
+  if (config.model && config.model !== 'auto' && config.model !== 'auto-smart') return { model: config.model };
   if (continuation && routedModel) return { model: routedModel };
-  const route = routeClaudeModel(prompt);
+
+  // Smart routing: let the cheap model pick. On any failure it returns null and we drop through
+  // to the same regex routers 'auto' uses — so a flaky classifier never breaks a turn.
+  if (config.model === 'auto-smart') {
+    const smart = await classifySmart(config.cli, prompt);
+    if (smart) {
+      routedModel = smart.model;
+      return { model: smart.model, routed: smart };
+    }
+  }
+
+  if (config.cli === 'claude') {
+    const route = routeClaudeModel(prompt);
+    routedModel = route.model;
+    return { model: route.model, routed: route };
+  }
+  if (config.cli === 'codex') {
+    // codex auto picks the model family (coding → gpt-5-codex) AND the reasoning effort,
+    // returning the combined "<model>:<effort>" token buildCmd splits apart.
+    const route = routeCodexModel(prompt);
+    routedModel = route.model;
+    return { model: route.model, routed: route };
+  }
+  // agy: map the routed tier onto its fixed model ladder (AGY_TIER), just like Claude.
+  const route = routeAgyModel(prompt);
   routedModel = route.model;
   return { model: route.model, routed: route };
 }
@@ -175,6 +324,19 @@ const SYSTEM_CONTEXT = [
   '',
   'You DO NOT explain how to run commands — you RUN them by outputting them in ```bash code blocks.',
   'The system will automatically execute any geins command you output in a code block and return the result.',
+  '',
+  'HARD RULE — every interaction with Geins goes through a `geins` command. NO EXCEPTIONS:',
+  '- To READ or CHANGE any Geins data (products, orders, campaigns, account, workflows, anything) you MUST',
+  '  run a `geins ...` command. NEVER reach the Geins API any other way — no curl, wget, httpie, fetch, a',
+  '  language HTTP client, or a hand-written URL/endpoint. The geins binary owns the auth and the correct routes.',
+  '- Prefer the DEDICATED command (e.g. `geins product list`, `geins order get`, `geins campaign create`).',
+  '  Only if no dedicated command fits, use the `geins api <METHOD> <path>` escape hatch — that is still a',
+  '  geins command. Never substitute a raw HTTP call or invent an endpoint URL.',
+  '- Do not guess at API paths from docs/URLs. If unsure which command to use, run `geins help` and',
+  '  `geins <group> help` to find it — never improvise a request outside the geins CLI.',
+  '- Your own tools (Read/Bash/Write) are ONLY for LOCAL data work — reading dropped files, parsing JSON you',
+  '  already fetched with geins, building CSV/Markdown, running scripts over local data. They are NEVER a',
+  '  channel to Geins itself.',
   '',
   buildCommandCatalog(),
   '',
@@ -247,10 +409,13 @@ const SYSTEM_CONTEXT = [
   '    market id first; --percentage for % off, --amount <CUR>:<n> for a fixed amount)',
   '  "get / fetch / show data" → direct geins command (geins product ..., geins order ...)',
   '  "list / show workflows" → geins workflow list',
-  '  "which products could be variants / group these as variants" → run geins product list --json,',
+  '  "which products could be variants / group these as variants" → run geins product list --all --json,',
   '    find candidate families (similar names/article numbers, same brand, differing by color/size) that',
-  '    are NOT already grouped (verify with geins product variants <id>), then propose grouping them and,',
-  '    if confirmed, geins product variants create (labels must be registered first via variants labels add).',
+  '    are NOT already grouped (verify with geins product variants <id>), then propose grouping them. When',
+  '    confirmed, run `geins product variants help` for syntax and create each group with the SINGLE-LINE',
+  '    FLAG form (NOT a multi-line JSON body): first register each label —',
+  '    `geins product variants labels add <Dim>` — then',
+  '    `geins product variants create --name "<grp>" --label <Dim> --product <id>:<Dim>=<Value> --product <id>:<Dim>=<Value>`.',
   '  "suggest relations / what should relate to X / find accessories|cross-sells|similar products" →',
   '    run geins product relation-types list (the available kinds, e.g. Accessories/CrossSell) and',
   '    geins product list --json, reason about which products go together (complements, accessories,',
@@ -269,6 +434,8 @@ const SYSTEM_CONTEXT = [
   '- Prefer foreground batches that print progress as they run over fire-and-forget background processes.',
   '',
   'RULES:',
+  '- HARD RULE (see top): reach Geins ONLY via `geins` commands — never curl/fetch/raw HTTP or a',
+  '  hand-rolled URL. Use the dedicated command first; `geins api <METHOD> <path>` is the only escape hatch.',
   '- ALWAYS output commands in ```bash blocks. Never tell the user to run them manually.',
   '- To create a workflow, output: geins workflow create --body \'<full JSON>\'',
   '- If you need information first (e.g. manifest, existing workflows), run those commands first.',
@@ -400,6 +567,28 @@ export async function listOllamaModels(): Promise<string[]> {
   }
 }
 
+/**
+ * The codex models the signed-in account can actually use, via `codex debug models` (reads codex's
+ * local cache — instant, no network). Filters to user-visible models (`visibility: "list"`, dropping
+ * internal ones like codex-auto-review) and orders by codex's own `priority` (lower = more prominent,
+ * so the flagship leads). Returns [] on any failure so the picker falls back to the static list.
+ */
+export async function listCodexModels(): Promise<string[]> {
+  try {
+    const proc = Bun.spawn(['codex', 'debug', 'models'], { stdout: 'pipe', stderr: 'pipe' });
+    const out = await new Response(proc.stdout).text();
+    if (await proc.exited !== 0) return [];
+    const data = JSON.parse(out) as { models?: Array<{ slug?: unknown; visibility?: unknown; priority?: unknown }> };
+    const list = Array.isArray(data.models) ? data.models : [];
+    return list
+      .filter(m => m.visibility === 'list' && typeof m.slug === 'string')
+      .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
+      .map(m => m.slug as string);
+  } catch {
+    return [];
+  }
+}
+
 export async function saveCopilotChoice(option: CopilotOption, model?: string): Promise<void> {
   const config = await loadConfig();
   config.copilot = { cli: option.cli, command: option.name, model };
@@ -487,7 +676,7 @@ export async function chat(prompt: string): Promise<string> {
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
   const isStreamJson = option.supportsStreamJson;
-  const turn = resolveTurnModel(config, prompt);
+  const turn = await resolveTurnModel(config, prompt);
   await appendMessage({ role: 'user', content: prompt, provider: config.cli, model: turn.model });
   // Always include conversation history: each copilot invocation is a stateless
   // one-shot spawn (e.g. `claude -p`), so prior turns and tool results only reach
@@ -625,7 +814,7 @@ export async function chatStream(
   const option = getCopilotOption(config.cli);
   if (!option) throw new Error(`Unknown copilot CLI: ${config.cli}`);
 
-  const turn = resolveTurnModel(config, prompt, opts?.continuation);
+  const turn = await resolveTurnModel(config, prompt, opts?.continuation);
   // Surface the routing decision so the UI can show which tier is handling the turn.
   if (turn.routed) onEvent?.({ kind: 'model', label: turn.routed.model });
 
@@ -636,7 +825,7 @@ export async function chatStream(
   // One spawn+stream attempt. When `resumeId` is set, the agent CLI continues its own session
   // (prior turns and tool results stay on its side), so we send ONLY the new message. Otherwise
   // we replay the full system+history prompt — the only way stateless CLIs (e.g. `claude -p` with
-  // no session, codex, gemini, ollama) see prior context.
+  // no session, codex, agy, ollama) see prior context.
   const attempt = async (
     resumeId: string | undefined,
   ): Promise<{ buffer: string; sessionId?: string; exitCode: number; readStderr: () => Promise<string> }> => {
@@ -862,17 +1051,38 @@ export function buildAttachmentSection(files: AttachedFile[]): string {
   return parts.join('\n');
 }
 
+/**
+ * Does the string end while still inside an open quote? Mirrors tokenizeArgs's quote handling
+ * (no escape processing) so the two agree on where a quoted argument ends. Used to detect a
+ * `geins … --body '{` line whose quote only closes on a LATER line.
+ */
+function endsInsideQuote(s: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (const ch of s) {
+    if (quote) { if (ch === quote) quote = null; }
+    else if (ch === '"' || ch === "'") quote = ch;
+  }
+  return quote !== null;
+}
+
 export function extractGeinsCommands(text: string): string[] {
   const commands: string[] = [];
   const codeBlockRegex = /```(?:bash|sh|shell)?\s*\n([\s\S]*?)```/g;
   let match;
   while ((match = codeBlockRegex.exec(text)) !== null) {
-    const lines = match[1]!.trim().split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('geins ')) {
-        commands.push(trimmed);
+    const lines = match[1]!.replace(/\s+$/, '').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i]!.trim();
+      if (!trimmed.startsWith('geins ')) continue;
+      // Reassemble a command that spans multiple lines — a quoted argument left open (e.g. a
+      // multi-line `--body '{ … }'` JSON) or a trailing backslash continuation. Without this the
+      // command is truncated at the first line and a JSON body breaks ("Expected '}'").
+      let cmd = trimmed;
+      while ((endsInsideQuote(cmd) || cmd.endsWith('\\')) && i + 1 < lines.length) {
+        i++;
+        cmd = (cmd.endsWith('\\') ? cmd.slice(0, -1) : cmd) + '\n' + lines[i]!;
       }
+      commands.push(cmd);
     }
   }
   if (commands.length === 0) {
@@ -930,7 +1140,14 @@ export async function executeGeinsCommand(command: string): Promise<{ output: st
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;
-  return { output: (stdout || stderr).trim(), exitCode };
+  const output = (stdout || stderr).trim();
+  // A non-zero exit means the command failed (bad args, or the API was unreachable —
+  // "Unable to connect"). Record it in the output folder so failed runs leave a trace,
+  // not just the successful API dumps. Skip cancellations (Ctrl-C kills the proc).
+  if (exitCode !== 0 && !getActiveSignal()?.aborted) {
+    await recordCliFailure(command, exitCode, output);
+  }
+  return { output, exitCode };
 }
 
 /**

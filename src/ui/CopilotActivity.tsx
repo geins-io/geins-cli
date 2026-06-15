@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { Markdown } from './Markdown.tsx';
+import { formatElapsed } from './format.ts';
 
 export interface ActivityEntry {
   kind: 'tool' | 'text';
@@ -17,17 +18,12 @@ interface CopilotActivityProps {
   isWorking: boolean;
   /** When the whole turn started — drives the header's total elapsed counter while live. */
   startedAt?: number;
+  /** The model this task was routed to — shown in the header (e.g. "auto-smart" picks per ask, so
+   *  we surface which model it chose). Omitted for pinned/plain modes where the model is implicit. */
+  taskModel?: string;
 }
 
-function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}m ${s.toString().padStart(2, '0')}s`;
-}
-
-export function CopilotActivity({ providerLabel, entries, isWorking, startedAt }: CopilotActivityProps) {
+export function CopilotActivity({ providerLabel, entries, isWorking, startedAt, taskModel }: CopilotActivityProps) {
   // Tick once a second while live so the elapsed counters count — a moving clock is the
   // strongest "still alive" signal during a long tool call. Committed cards
   // (isWorking=false) land in <Static> scrollback and must not keep timers running.
@@ -49,7 +45,7 @@ export function CopilotActivity({ providerLabel, entries, isWorking, startedAt }
   return (
     <Box flexDirection="column">
       <Box gap={1}>
-        <Text dimColor>{`⏺ copilot`}</Text>
+        <Text dimColor>{taskModel ? `⏺ copilot - ${taskModel}` : `⏺ copilot`}</Text>
         {isWorking && startedAt !== undefined && (
           <Text dimColor>{`(${formatElapsed(now - startedAt)})`}</Text>
         )}

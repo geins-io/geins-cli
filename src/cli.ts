@@ -8,7 +8,7 @@ import { loadSession } from './auth/session.ts';
 import { formatError, exitWithError, notLoggedIn } from './api/errors.ts';
 import { getApiUrl } from './config/env.ts';
 import { readFileSync } from 'node:fs';
-import { getProduct, createProduct, updateProduct, deleteProduct, type ProductWrite, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, createProductItem, setProductStock, queryProductStock, listPriceLists, getProductPrices, setProductPrices, type PriceWrite, type ProductItemWrite, type ProductItemIdType, type ProductItemStockWrite, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
+import { getProduct, createProduct, updateProduct, deleteProduct, type ProductWrite, queryProducts, queryAllProducts, parseProductListArgs, productName, getProductItems, productItemName, createProductItem, setProductStock, queryProductStock, listPriceLists, getProductPrices, setProductPrices, type PriceWrite, type ProductItemWrite, type ProductItemIdType, type ProductItemStockWrite, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, setProductVariants, deleteVariantGroup, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, setProductText, parseProductTextField, PRODUCT_TEXT_FIELD_TOKENS, type ProductTextField, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, setMainCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, updateProductParameterValues, replaceProductParameterValues, removeProductParameterAssignments, type ProductParameterValueWrite, type ProductParameterAssignment, type LocalizableContent, type ProductIdType } from './commands/products.ts';
 import { validateManagementApi, validateMerchantApi, setProfileOverride } from './api/live-client.ts';
 import { cliHelpSpec } from './help.ts';
 import {
@@ -83,7 +83,7 @@ import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson
 import { chat, getCopilotConfig, clearConversationHistory, getMemoryEnabled, setMemoryEnabled } from './commands/copilot.ts';
 import { outputJson } from './output/format.ts';
 import { setBaseTitle } from './output/title.ts';
-import { PRODUCT_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP } from './commands/help-text.ts';
+import { PRODUCT_HELP, VARIANTS_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP } from './commands/help-text.ts';
 import { VERSION } from './version.ts';
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
@@ -274,7 +274,8 @@ async function runDirect(rawArgs: string[]): Promise<void> {
   const commandArgs = args.slice(1);
 
   if (commandArgs.includes('--help')) {
-    if (commandName === 'product') console.log(PRODUCT_HELP);
+    // `product variants … --help` gets the focused variants guide, not the whole product help.
+    if (commandName === 'product') console.log(commandArgs[0]?.toLowerCase() === 'variants' ? VARIANTS_HELP : PRODUCT_HELP);
     else if (commandName === 'order') console.log(ORDER_HELP);
     else if (commandName === 'campaign') console.log(CAMPAIGN_HELP);
     else if (commandName === 'account') console.log(ACCOUNT_HELP);
@@ -975,6 +976,13 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           case 'variants': {
             const action = subArgs[0]?.toLowerCase();
 
+            // Help: `variants help`, `variants --help/-h`, or `variants <action> --help` all print
+            // the focused, copy-paste-ready variants guide (leads with the single-line flag form).
+            if (action === 'help' || subArgs.some((a) => a === '--help' || a === '-h')) {
+              console.log(VARIANTS_HELP);
+              break;
+            }
+
             // Label registry management: variants labels [add|remove|rename]
             if (action === 'labels') {
               const labelAction = subArgs[1]?.toLowerCase();
@@ -1069,8 +1077,9 @@ async function runDirect(rawArgs: string[]): Promise<void> {
 
             const id = subArgs[0];
             if (!id) {
-              console.error('Usage: geins product variants <productId> [--idtype <0-3>] [--json]');
-              process.exit(1);
+              // Bare `variants` — show the full guide rather than a terse one-liner.
+              console.log(VARIANTS_HELP);
+              break;
             }
             let idType: ProductIdType | undefined;
             const itIdx = subArgs.indexOf('--idtype');
@@ -1651,8 +1660,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
           }
           case 'list':
           case 'query': {
-            const { query, page, include, json } = parseProductListArgs(subArgs);
-            const result = await queryProducts(query, { page: page ?? 1, include });
+            const { query, page, include, json, all } = parseProductListArgs(subArgs);
+            // --all pages through the whole catalog (auto-carrying BatchId); otherwise one page.
+            const result = all
+              ? await queryAllProducts(query, { include })
+              : await queryProducts(query, { page: page ?? 1, include });
             if (json) {
               console.log(JSON.stringify(result, null, 2));
               break;
@@ -1662,10 +1674,12 @@ async function runDirect(rawArgs: string[]): Promise<void> {
               console.log(`${status} ${productName(p)}  (${p.ProductId})  ${p.ArticleNumber ?? ''}`.trimEnd());
             }
             const pr = result.page;
-            if (pr) {
+            if (all) {
+              console.log(`\n${result.products.length} products (all ${pr?.PageCount ?? 1} pages)`);
+            } else if (pr) {
               console.log(`\n${result.products.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
               if (pr.HasMoreRows) {
-                console.log(`Next page: geins product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+                console.log(`Next page: geins product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}   (or --all for the whole catalog)`);
               }
             }
             break;

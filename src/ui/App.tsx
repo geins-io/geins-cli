@@ -27,7 +27,7 @@ import { formatError } from '../api/errors.ts';
 import { SelectCopilot } from './SelectCopilot.tsx';
 import { Markdown } from './Markdown.tsx';
 import { ThinkingIndicator } from './ThinkingIndicator.tsx';
-import { getCopilotConfig, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, collectAttachedFiles, buildAttachmentSection, getMemoryEnabled, setMemoryEnabled, type StreamEvent } from '../commands/copilot.ts';
+import { getCopilotConfig, getCopilotOption, chatStream, getContextUsageAsync, clearConversationHistory, extractGeinsCommands, executeGeinsCommand, addToolResult, collectAttachedFiles, buildAttachmentSection, getMemoryEnabled, setMemoryEnabled, type StreamEvent, type CopilotOption } from '../commands/copilot.ts';
 import { CopilotActivity, type ActivityEntry } from './CopilotActivity.tsx';
 import {
   startSession,
@@ -88,7 +88,7 @@ import {
   campaignLabel,
   type CampaignWrite,
 } from '../commands/campaigns.ts';
-import { getProduct, queryProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
+import { getProduct, queryProducts, queryAllProducts, parseProductListArgs, productName, getProductItems, productItemName, getVariantGroup, variantSummary, buildVariantGroupFromProducts, parseVariantCreateFlags, parseVariantGroupBody, listVariantLabels, addVariantLabel, renameVariantLabel, removeVariantLabel, getProductImages, addProductImage, addExistingProductImage, deleteProductImage, setProductImagePrimary, reorderProductImage, imageNameFromUrl, listRelationTypes, getRelationType, createRelationType, updateRelationType, deleteRelationType, queryBrands, getBrand, createBrand, updateBrand, deleteBrand, brandName, type BrandWrite, queryCategories, getCategory, createCategory, updateCategory, assignProductCategory, unassignProductCategory, categoryName, type CategoryWrite, getProductRelations, linkRelatedProducts, unlinkRelatedProducts, getProductParameters, getProductParameterValue, setProductParameterValue, removeProductParameterValue, getProductParameterDef, createProductParameter, updateProductParameter, getProductParameterGroup, createProductParameterGroup, updateProductParameterGroup, getPredefinedValue, createPredefinedValue, updatePredefinedValueNames, parameterValueSummary, type LocalizableContent, type BuildVariantGroupResult } from '../commands/products.ts';
 import { listMarkets, listLanguages, listChannels, listLocales, marketName, listUserAccounts } from '../commands/account.ts';
 import {
   resolveMerchantContext,
@@ -288,6 +288,10 @@ export function App({ version = VERSION }: { version?: string }) {
   // a callback; setActiveMode('confirm') drives the render.
   const confirmRef = useRef<{ message: string; onYes: () => void | Promise<void> } | null>(null);
 
+  // The provider + current model for the `/model` picker (change model within the active
+  // provider). Held in a ref; setActiveMode('select-model') drives the render.
+  const modelPickerRef = useRef<{ option: CopilotOption; currentModel?: string } | null>(null);
+
   const askConfirm = useCallback((message: string, onYes: () => void | Promise<void>) => {
     confirmRef.current = { message, onYes };
     appState.setActiveMode('confirm');
@@ -476,6 +480,11 @@ export function App({ version = VERSION }: { version?: string }) {
         // One clock for the whole user turn (initial stream + agentic follow-up rounds) —
         // the header timer must show total wall time, not reset per round.
         const turnStartedAt = Date.now();
+        // In 'auto-smart' mode the model is chosen per ask (and not obvious to the user), so we
+        // surface the routed model in the activity header. Set from the 'model' stream event;
+        // stays undefined for plain/pinned modes, where the header is just "⏺ copilot".
+        const isAutoSmart = copilotCfg?.model === 'auto-smart';
+        let taskModel: string | undefined;
 
         // Text shown for a model turn: drop <think> blocks and the ```bash``` command
         // blocks (those run and show as "⟳ <cmd>", so repeating them is just noise).
@@ -499,6 +508,7 @@ export function App({ version = VERSION }: { version?: string }) {
               entries={[...activityLog]}
               isWorking={true}
               startedAt={turnStartedAt}
+              taskModel={taskModel}
             />,
           );
         };
@@ -516,6 +526,7 @@ export function App({ version = VERSION }: { version?: string }) {
           } else if (event.kind === 'model') {
             // Auto-routed tier for this ask — reflect it in the header.
             providerLabel = `${copilotCfg?.command ?? 'copilot'} · ${event.label}`;
+            if (isAutoSmart) taskModel = event.label;
             renderActivity();
           } else if (event.kind === 'text') {
             // text events update the final answer — handled by onChunk
@@ -557,6 +568,7 @@ export function App({ version = VERSION }: { version?: string }) {
               providerLabel={`${providerLabel}  ·  context ${ctx.percent}%`}
               entries={finalEntries}
               isWorking={false}
+              taskModel={taskModel}
             />,
           );
 
@@ -619,6 +631,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   entries={[...followupLog]}
                   isWorking={true}
                   startedAt={turnStartedAt}
+                  taskModel={taskModel}
                 />,
               );
             };
@@ -674,6 +687,7 @@ export function App({ version = VERSION }: { version?: string }) {
                   providerLabel={`${providerLabel}  ·  context ${ctx2.percent}%`}
                   entries={finalFollowup}
                   isWorking={false}
+                  taskModel={taskModel}
                 />,
               );
               lastAnswer = followupCleaned;
@@ -742,6 +756,7 @@ export function App({ version = VERSION }: { version?: string }) {
           logText('  /copilot    Toggle AI copilot mode  /copilot provider');
           if (appState.copilotActive) {
             logText('  /new        New conversation         Clear copilot history');
+            logText('  /model      Change model            Pick another model from the current provider');
           }
           logText('  /history    Search past sessions     /history <query>');
           logText('  /memory     View learned knowledge   /memory clear (start fresh)');
@@ -1221,14 +1236,17 @@ export function App({ version = VERSION }: { version?: string }) {
             }
             case 'list':
             case 'query': {
-              const { query, page, include } = parseProductListArgs(args.slice(1));
+              const { query, page, include, all } = parseProductListArgs(args.slice(1));
               appState.setLiveComponent(
                 <Box key="product-spinner" gap={1} paddingX={1}>
                   <Spinner type="dots" />
-                  <Text dimColor>Querying products...</Text>
+                  <Text dimColor>{all ? 'Querying all products…' : 'Querying products...'}</Text>
                 </Box>,
               );
-              const result = await queryProducts(query, { page: page ?? 1, include });
+              // --all pages through the whole catalog (auto-carrying BatchId); otherwise one page.
+              const result = all
+                ? await queryAllProducts(query, { include })
+                : await queryProducts(query, { page: page ?? 1, include });
               appState.setLiveComponent(null);
               if (result.products.length === 0) { logDim('  No products found.'); break; }
               const CAP = 50;
@@ -1236,11 +1254,13 @@ export function App({ version = VERSION }: { version?: string }) {
                 const status = p.Active ? '●' : '○';
                 logText(`  ${status} ${productName(p)}  (${p.ProductId})${p.ArticleNumber ? `  ${p.ArticleNumber}` : ''}`.trimEnd());
               }
-              if (result.products.length > CAP) logDim(`  … and ${result.products.length - CAP} more on this page`);
+              if (result.products.length > CAP) logDim(`  … and ${result.products.length - CAP} more${all ? '' : ' on this page'}`);
               const pr = result.page;
-              if (pr) {
+              if (all) {
+                logDim(`  ${result.products.length} products (all ${pr?.PageCount ?? 1} pages)`);
+              } else if (pr) {
                 logDim(`  ${result.products.length} shown · ${pr.RowCount ?? '?'} total · page ${pr.Page ?? 1}/${pr.PageCount ?? 1}`);
-                if (pr.HasMoreRows) logDim(`  Next: /product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}`);
+                if (pr.HasMoreRows) logDim(`  Next: /product list --page ${(pr.Page ?? 1) + 1} --batch ${pr.BatchId}   (or --all)`);
               }
               break;
             }
@@ -2369,6 +2389,27 @@ export function App({ version = VERSION }: { version?: string }) {
           break;
         }
 
+        case 'model': {
+          // Change the model within the already-selected provider (keep the provider, swap model).
+          if (!appState.copilotActive) {
+            logDim('  Copilot mode is not active. Run /copilot to enable it.');
+            break;
+          }
+          const cfg = await getCopilotConfig();
+          const option = cfg ? getCopilotOption(cfg.cli) : undefined;
+          if (!cfg || !option) {
+            logDim('  No copilot provider configured. Run /copilot to set one up.');
+            break;
+          }
+          if (!option.supportsModels) {
+            logDim(`  ${option.name} has no selectable models. Use /provider to switch provider.`);
+            break;
+          }
+          modelPickerRef.current = { option, currentModel: cfg.model };
+          appState.setActiveMode('select-model');
+          break;
+        }
+
         case 'theme': {
           const newTheme = await appState.toggleTheme();
           logSuccess(`  ✓ Switched to ${newTheme} mode`);
@@ -2584,6 +2625,24 @@ export function App({ version = VERSION }: { version?: string }) {
           }}
           onCancel={() => {
             logDim('  Copilot setup cancelled.');
+            appState.setActiveMode(null);
+          }}
+          onLog={(text) => logText(`  ${text}`)}
+        />
+      )}
+
+      {appState.activeMode === 'select-model' && modelPickerRef.current && (
+        <SelectCopilot
+          lockedProvider={modelPickerRef.current.option}
+          currentModel={modelPickerRef.current.currentModel}
+          onComplete={async () => {
+            appState.setActiveMode(null);
+            // Keep the conversation — only the model for upcoming turns changes.
+            const cfg = await getCopilotConfig();
+            if (cfg) appState.setCopilotProvider(cfg.model ? `${cfg.command} · ${cfg.model}` : cfg.command);
+          }}
+          onCancel={() => {
+            logDim('  Model selection cancelled.');
             appState.setActiveMode(null);
           }}
           onLog={(text) => logText(`  ${text}`)}

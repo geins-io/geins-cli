@@ -2,6 +2,7 @@ import { getMgmtApiUrl, getMerchantApiUrl } from '../config/env.ts';
 import { loadCredentials, loadCredentialsByName, type ApiCredentials } from '../config/store.ts';
 import { ApiError, noCredentials } from './errors.ts';
 import { recordResponse } from '../output/sink.ts';
+import { fetchLogged } from './fetch-logged.ts';
 import { getActiveSignal } from './abort.ts';
 
 // Live Geins APIs, authenticated with API User credentials (see ApiCredentials):
@@ -85,12 +86,12 @@ export async function mgmtRequest<T = unknown>(
   }
 
   const method = options?.method ?? 'GET';
-  const res = await fetch(url.toString(), {
+  const res = await fetchLogged(url.toString(), {
     method,
     headers: mgmtHeaders(credentials),
     body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
     signal: getActiveSignal(),
-  });
+  }, { method, path: apiPath, query: options?.query, body: options?.body });
 
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, method, apiPath);
@@ -131,7 +132,9 @@ export async function mgmtUpload<T = unknown>(
 
   const basic = Buffer.from(`${credentials.username}:${credentials.managementApiPassword}`).toString('base64');
   const method = options?.method ?? 'PUT';
-  const res = await fetch(url.toString(), {
+  // Binary payload — log a descriptor (type + size), not the raw bytes.
+  const bodyInfo = `<binary ${contentType}, ${body.length} bytes>`;
+  const res = await fetchLogged(url.toString(), {
     method,
     headers: {
       'Authorization': `Basic ${basic}`,
@@ -141,10 +144,7 @@ export async function mgmtUpload<T = unknown>(
     },
     body,
     signal: getActiveSignal(),
-  });
-
-  // Binary payload — log a descriptor (type + size), not the raw bytes.
-  const bodyInfo = `<binary ${contentType}, ${body.length} bytes>`;
+  }, { method, path: apiPath, query: options?.query, body: bodyInfo });
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, method, apiPath);
     await recordResponse({ method, path: apiPath, query: options?.query, body: bodyInfo, status: res.status, error: err.body || err.message });
@@ -169,7 +169,9 @@ export async function merchantQuery<T = unknown>(
   creds?: ApiCredentials,
 ): Promise<T> {
   const credentials = creds ?? (await getCredentials());
-  const res = await fetch(getMerchantApiUrl(), {
+  // Log variables first so the request params stay visible even when the long query is truncated.
+  const reqBody = { variables, query };
+  const res = await fetchLogged(getMerchantApiUrl(), {
     method: 'POST',
     headers: {
       'X-ApiKey': credentials.merchantApiKey,
@@ -178,10 +180,7 @@ export async function merchantQuery<T = unknown>(
     },
     body: JSON.stringify({ query, variables }),
     signal: getActiveSignal(),
-  });
-
-  // Log variables first so the request params stay visible even when the long query is truncated.
-  const reqBody = { variables, query };
+  }, { method: 'POST', path: '/graphql', body: reqBody });
   if (!res.ok) {
     const err = await ApiError.fromResponse(res, 'POST', '/graphql');
     await recordResponse({ method: 'POST', path: '/graphql', body: reqBody, status: res.status, error: err.body || err.message });

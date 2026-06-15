@@ -1,9 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
+import Spinner from 'ink-spinner';
 import { existsSync } from 'node:fs';
 import { loadCredentialsStore, loadInputHistory, saveInputHistory } from '../config/store';
 import { listWorkflows } from '../commands/workflows';
+import { formatElapsed } from './format.ts';
 
 const COMMANDS: Record<string, string> = {
   help: 'Show available commands',
@@ -18,6 +20,7 @@ const COMMANDS: Record<string, string> = {
   campaign: 'Campaign commands',
   copilot: 'Toggle AI copilot mode',
   provider: 'Switch copilot provider',
+  model: 'Switch model (current provider)',
   new: 'New conversation',
   memory: 'Inspect or clear copilot memory',
   api: 'Raw API request',
@@ -98,8 +101,8 @@ const ARG_HINTS: Record<string, Record<string, string>> = {
     DELETE: '<path>',
   },
   copilot: {
-    provider: 'claude | codex | gemini | ollama | lmstudio',
-    set: 'claude | codex | gemini | ollama | lmstudio',
+    provider: 'claude | codex | agy | ollama | lmstudio',
+    set: 'claude | codex | agy | ollama | lmstudio',
   },
 };
 
@@ -199,8 +202,30 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
   const [workflows, setWorkflows] = useState<Array<{ id: string; name: string }> | null>(null);
   const [workflowIndex, setWorkflowIndex] = useState(0);
 
-  // Commands offerable right now (`/new` and `/provider` only make sense once a copilot is active).
-  const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new' && c !== 'provider');
+  // Persistent "still working" footer clock. Driven purely by `busy` (true for the WHOLE
+  // turn), not by whatever live component is on screen above — so it can't gap when a card
+  // is committed mid-turn, between agentic rounds, or while memory is being written. A
+  // ticking number in a fixed spot is the one unambiguous "copilot is alive" signal.
+  const [busyElapsed, setBusyElapsed] = useState(0);
+  const busyStartRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!busy) {
+      busyStartRef.current = null;
+      setBusyElapsed(0);
+      return;
+    }
+    busyStartRef.current = Date.now();
+    setBusyElapsed(0);
+    const timer = setInterval(() => {
+      if (busyStartRef.current !== null) {
+        setBusyElapsed(Date.now() - busyStartRef.current);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  // Commands offerable right now (`/new`, `/provider`, `/model` only make sense once a copilot is active).
+  const available = copilotActive ? COMMAND_NAMES : COMMAND_NAMES.filter(c => c !== 'new' && c !== 'provider' && c !== 'model');
 
   const getMatches = (input: string): string[] => {
     const query = input.startsWith('/') ? input.slice(1) : input;
@@ -643,7 +668,16 @@ export function ChatInput({ disabled = false, busy = false, copilotActive = fals
           {copilotActive && copilotProvider && (
             <Text dimColor>{` · ${copilotProvider}`}</Text>
           )}
-          <Text dimColor>{busy ? ' · ctrl-c to cancel' : ' (shift+tab to cycle)'}</Text>
+          {busy ? (
+            <>
+              <Text dimColor> · </Text>
+              <Text color="magenta"><Spinner type="dots" /></Text>
+              <Text color="magenta">{` working ${formatElapsed(busyElapsed)}`}</Text>
+              <Text dimColor> · ctrl-c to cancel</Text>
+            </>
+          ) : (
+            <Text dimColor> (shift+tab to cycle)</Text>
+          )}
         </Box>
         {copilotActive && <Text dimColor>⇧⏎ newline</Text>}
       </Box>

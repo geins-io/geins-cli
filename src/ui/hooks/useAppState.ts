@@ -7,7 +7,7 @@ import { setBaseTitle } from '../../output/title.ts';
 import type { AuthResponse } from '../../auth/login.ts';
 import type { SessionMeta } from '../SelectSession.tsx';
 
-export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | 'resume-picker' | 'confirm' | null;
+export type ActiveMode = 'login' | 'apikey' | 'select-apikey' | 'variant-builder' | 'select-account' | 'select-copilot' | 'select-model' | 'resume-picker' | 'confirm' | null;
 
 export interface ApiKeyPicker {
   names: string[];

@@ -3,6 +3,7 @@ import { refresh } from '../auth/login.ts';
 import { loadSession, saveSession, expiresSoon, parseJwtExp, type StoredSession } from '../auth/session.ts';
 import { ApiError, notLoggedIn } from './errors.ts';
 import { recordResponse } from '../output/sink.ts';
+import { fetchLogged } from './fetch-logged.ts';
 import { getActiveSignal } from './abort.ts';
 
 export interface RequestOptions {
@@ -76,12 +77,12 @@ export async function request<T = unknown>(path: string, options?: RequestOption
   }
 
   const signal = options?.signal ?? getActiveSignal();
-  const res = await fetch(url.toString(), {
+  const res = await fetchLogged(url.toString(), {
     method,
     headers,
     body: options?.body ? JSON.stringify(options.body) : undefined,
     signal,
-  });
+  }, { method, path, query: options?.query, body: options?.body });
 
   // Retry once on 401
   if (res.status === 401) {
@@ -94,12 +95,12 @@ export async function request<T = unknown>(path: string, options?: RequestOption
 
     headers['Authorization'] = `Bearer ${session.accessToken}`;
 
-    const retry = await fetch(url.toString(), {
+    const retry = await fetchLogged(url.toString(), {
       method,
       headers,
       body: options?.body ? JSON.stringify(options.body) : undefined,
       signal,
-    });
+    }, { method, path, query: options?.query, body: options?.body });
 
     if (!retry.ok) {
       const err = await ApiError.fromResponse(retry, method, path);

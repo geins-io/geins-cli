@@ -173,3 +173,30 @@ export async function recordResponse(record: ResponseRecord): Promise<string | n
     return null;
   }
 }
+
+/**
+ * Best-effort: record a CLI command the copilot ran that FAILED (non-zero exit — e.g. the API was
+ * unreachable, "Unable to connect"). Writes a line to requests.log and dumps the full command output
+ * to a `…_CLI_FAILED_<cmd>.txt` file, mirroring recordResponse so failures land in the same timeline.
+ * No-op when no output dir is configured; never throws.
+ */
+export async function recordCliFailure(command: string, exitCode: number, output: string): Promise<string | null> {
+  try {
+    const dir = await getAccountOutputDir();
+    if (!dir) return null;
+    await mkdir(dir, { recursive: true });
+
+    const seq = String(++counter).padStart(4, '0');
+    const file = join(dir, `${fileStamp()}_${seq}_CLI_FAILED_${slug(command)}.txt`);
+    await writeFile(file, `$ ${command}\nexit code: ${exitCode}\n\n${output || '(no output)'}\n`);
+
+    const stamp = new Date().toISOString();
+    const oneLine = output.replace(/\s+/g, ' ').trim().slice(0, 200);
+    const line = `[${stamp}] CLI ${command} → exit ${exitCode} FAILED ${oneLine} saved ${file.split('/').pop()}`;
+    await appendFile(join(dir, 'requests.log'), line + '\n');
+
+    return file;
+  } catch {
+    return null;
+  }
+}
