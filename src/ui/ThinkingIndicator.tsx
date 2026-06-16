@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';

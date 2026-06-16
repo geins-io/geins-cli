@@ -964,10 +964,13 @@ export async function addProductImage(
   if (!contentType) {
     throw new Error(`Unsupported image type for "${imageName}". Use .jpg, .png, or .gif.`);
   }
+  // "primary" means the admin's main slot, which is the lowest Order — default to position 0
+  // so a new primary image actually occupies the main slot instead of trailing the list.
+  const position = options?.position ?? (options?.primary ? 0 : undefined);
   const result = await uploadProductImage(id, imageName, bytes, contentType, {
     idType: options?.idType,
     primary: options?.primary,
-    position: options?.position,
+    position,
     method: options?.method,
   });
   return { ...result, imageName };
@@ -1029,13 +1032,18 @@ async function reuploadExistingImage(
   });
 }
 
-/** Make an existing image the primary one (re-uploads with isPrimaryImage=true). */
+/**
+ * Make an existing image the primary one. The admin's "main image" is the lowest-`Order`
+ * image, NOT the `isPrimaryImage` flag — so we set the flag *and* move it to position 0,
+ * otherwise the main slot stays vacant (renders as a "No Image" placeholder) when a lower
+ * Order was previously occupied by a now-deleted image.
+ */
 export async function setProductImagePrimary(
   id: string,
   imageName: string,
   options?: { idType?: ProductIdType },
 ): Promise<void> {
-  await reuploadExistingImage(id, imageName, { idType: options?.idType, primary: true });
+  await reuploadExistingImage(id, imageName, { idType: options?.idType, primary: true, position: 0 });
 }
 
 /** Change an existing image's position (re-uploads with the new position). */

@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React from 'react';
 import { Box, Text, useWindowSize } from 'ink';
 import { PROMPT, WORDMARK, type LogoVariant } from './logos';

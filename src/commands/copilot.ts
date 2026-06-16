@@ -436,6 +436,7 @@ const SYSTEM_CONTEXT = [
   'RULES:',
   '- HARD RULE (see top): reach Geins ONLY via `geins` commands — never curl/fetch/raw HTTP or a',
   '  hand-rolled URL. Use the dedicated command first; `geins api <METHOD> <path>` is the only escape hatch.',
+  '- ALWAYS default to `--idtype 0` in any command unless the user explicitly asks for a different idtype.',
   '- ALWAYS output commands in ```bash blocks. Never tell the user to run them manually.',
   '- To create a workflow, output: geins workflow create --body \'<full JSON>\'',
   '- If you need information first (e.g. manifest, existing workflows), run those commands first.',

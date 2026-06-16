@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { VERSION } from '../version.ts';
@@ -190,7 +191,13 @@ export function App({ version = VERSION }: { version?: string }) {
 
   const logDim = useCallback((text: string) => {
     appState.addToChat(
-      <Text key={`msg-${appState.getNextKey()}`} dimColor>{text}</Text>,
+      <Text key={`msg-${appState.getNextKey()}`} color="white">{text}</Text>,
+    );
+  }, [appState.addToChat, appState.getNextKey]);
+
+  const logSeparator = useCallback(() => {
+    appState.addToChat(
+      <Text key={`msg-${appState.getNextKey()}`} color="gray">{"─".repeat(80)}</Text>,
     );
   }, [appState.addToChat, appState.getNextKey]);
 
@@ -325,6 +332,7 @@ export function App({ version = VERSION }: { version?: string }) {
         resetCredentialsCache();
         await applyMemoryAccount();
         appState.updateStatus({ apiAccount: match });
+        appState.refreshBanner(); // repaint the banner so the active key in the header updates
         logSuccess(`  ✓ Switched API key to '${match}'.`);
       });
     } else {
@@ -389,6 +397,8 @@ export function App({ version = VERSION }: { version?: string }) {
     resetCredentialsCache();
     await applyMemoryAccount();
     appState.setActiveMode(null);
+    appState.updateStatus({ apiAccount: name });
+    appState.refreshBanner(); // repaint the banner so the active key in the header updates
     logSuccess(`  ✓ Credentials '${name}' saved, validated, and activated.`);
   }, [appState, logSuccess]);
 
@@ -403,6 +413,8 @@ export function App({ version = VERSION }: { version?: string }) {
     await useCredentials(name);
     resetCredentialsCache();
     await applyMemoryAccount();
+    appState.updateStatus({ apiAccount: name });
+    appState.refreshBanner();
     logSuccess(`  ✓ Switched to '${name}'.`);
   }, [appState, logSuccess]);
 
@@ -804,6 +816,7 @@ export function App({ version = VERSION }: { version?: string }) {
               resetCredentialsCache();
               await applyMemoryAccount();
               appState.updateStatus({ apiAccount: name });
+              appState.refreshBanner();
               logSuccess(`  ✓ Switched to '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -816,6 +829,7 @@ export function App({ version = VERSION }: { version?: string }) {
               await applyMemoryAccount();
               const store = await loadCredentialsStore();
               appState.updateStatus({ apiAccount: store.active ?? '' });
+              appState.refreshBanner();
               logSuccess(`  ✓ Removed '${name}'.`);
             } else {
               logError(`  Unknown credentials profile: ${name}`);
@@ -825,6 +839,7 @@ export function App({ version = VERSION }: { version?: string }) {
             resetCredentialsCache();
             await applyMemoryAccount();
             appState.updateStatus({ apiAccount: '' });
+            appState.refreshBanner();
             logSuccess('  ✓ All API credentials cleared.');
           } else {
             logError(`  Unknown subcommand: apikey ${action}`);
@@ -2545,6 +2560,7 @@ export function App({ version = VERSION }: { version?: string }) {
     }
 
     } finally {
+      logSeparator();
       setBusy(false);
       setWorking(false);
       setActiveSignal(undefined);
@@ -2552,7 +2568,7 @@ export function App({ version = VERSION }: { version?: string }) {
       // Clear any lingering working/live indicator once the command (or copilot turn) is done.
       appState.setLiveComponent(null);
     }
-  }, [appState, logText, logDim, logSuccess, logError, exit, clearToWelcome]);
+  }, [appState, logText, logDim, logSuccess, logError, logSeparator, exit, clearToWelcome]);
 
   if (!appState.ready) {
     return (

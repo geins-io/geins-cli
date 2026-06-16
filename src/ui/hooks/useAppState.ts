@@ -86,6 +86,20 @@ export function useAppState() {
     setHistoryEpoch(e => e + 1);
   }, []);
 
+  /**
+   * Repaint WITHOUT dropping scrollback. Clears the screen and bumps the epoch so
+   * ChatHistory's <Static> remounts and re-emits the welcome banner (rebuilt from the
+   * current status) plus every committed component — same mechanism as the resize path.
+   * Unlike clearChat it keeps chatComponents, so the conversation is redrawn rather than
+   * wiped. Use it when only the banner content changed (e.g. the active API-key profile)
+   * and the history should survive — a plain updateStatus can't repaint an already-printed
+   * <Static> item.
+   */
+  const refreshBanner = useCallback(() => {
+    process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+    setHistoryEpoch(e => e + 1);
+  }, []);
+
   // Load session + config on mount, start memory session
   useEffect(() => {
     Promise.all([loadSession(), loadConfig(), loadCredentialsStore()]).then(async ([session, config, credentials]) => {
@@ -143,6 +157,7 @@ export function useAppState() {
     chatComponents,
     setChatComponents,
     clearChat,
+    refreshBanner,
     historyEpoch,
     liveComponent,
     setLiveComponent,

@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React, { useState } from 'react';
 import { Box, Text, useInput, useWindowSize } from 'ink';
 import type { AuthAccounts } from '../auth/login.ts';

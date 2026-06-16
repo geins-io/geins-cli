@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import { memo, Fragment } from 'react';
 import { Box, Static } from 'ink';
 

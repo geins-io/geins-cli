@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 import React from 'react';
 import { Text } from 'ink';
 import { Markdown } from './Markdown.tsx';
