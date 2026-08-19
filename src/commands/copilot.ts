@@ -139,9 +139,13 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     supportsModels: true,
     // No static list / no meta entries — the picker shows exactly the locally pulled models.
     probeModels: listOllamaModels,
-    contextWindow: 8000,
+    contextWindow: 32000,
     useStdin: true,
-    buildCmd: (model) => ['ollama', 'run', model ?? 'llama3.2'],
+    // `ollama run` is an interactive TUI: --hidethinking keeps qwen3-style reasoning out of
+    // stdout (the model still reasons internally, so command selection is unaffected), and
+    // --nowordwrap stops the cursor-rewrap escapes that otherwise DUPLICATE words in the
+    // captured reply. What noise remains is stripped by sanitizeTerminalOutput().
+    buildCmd: (model) => ['ollama', 'run', '--hidethinking', '--nowordwrap', model ?? 'llama3.2'],
   },
   {
     name: 'LM Studio',
@@ -628,6 +632,19 @@ export async function getContextUsageAsync(): Promise<{ used: number; total: num
   return { used, total, percent };
 }
 
+/**
+ * Clean the raw stdout of an interactive CLI (e.g. `ollama run`) before it is used as the
+ * model's reply: drop ANSI escapes, braille spinner frames and carriage returns. Providers
+ * that speak stream-json never go through here — their text arrives already structured.
+ */
+function sanitizeTerminalOutput(text: string): string {
+  return text
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+    .replace(/[\u2800-\u28FF]/g, '')
+    .replace(/\r/g, '')
+    .trim();
+}
+
 function extractResultFromStreamJson(output: string): string {
   const lines = output.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -705,7 +722,7 @@ export async function chat(prompt: string): Promise<string> {
     throw new Error(`Copilot exited with code ${exitCode}: ${stderr.trim()}`);
   }
 
-  const cleaned = isStreamJson ? extractResultFromStreamJson(output) : output.trim();
+  const cleaned = isStreamJson ? extractResultFromStreamJson(output) : sanitizeTerminalOutput(output);
   await appendMessage({ role: 'assistant', content: cleaned, provider: config.cli, model: turn.model });
   await processMemoryBlocks(cleaned);
   return cleaned;
@@ -911,13 +928,24 @@ export async function chatStream(
       }
       buffer = lastText;
     } else {
+      // Raw terminal output: sanitize the whole accumulated text each read and emit only the
+      // newly-clean tail, so an escape sequence split across two reads is still stripped.
+      let raw = '';
+      let emitted = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-        onChunk(chunk);
+        raw += decoder.decode(value, { stream: true });
+        // Hold back a trailing half-written escape sequence until the rest arrives.
+        const esc = raw.lastIndexOf('\x1b');
+        const safe = esc >= 0 && !/\x1b\[[0-9;?]*[a-zA-Z]/.test(raw.slice(esc)) ? raw.slice(0, esc) : raw;
+        buffer = sanitizeTerminalOutput(safe);
+        if (buffer.length > emitted) {
+          onChunk(buffer.slice(emitted));
+          emitted = buffer.length;
+        }
       }
+      buffer = sanitizeTerminalOutput(raw);
     }
 
     const exitCode = await proc.exited;
