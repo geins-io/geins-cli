@@ -481,6 +481,10 @@ export function App({ version = VERSION }: { version?: string }) {
       const attachmentSection = buildAttachmentSection(attachments);
       const copilotMessage = attachmentSection ? `${attachmentSection}\n\n${trimmed}` : trimmed;
       const copilotCfg = await getCopilotConfig();
+      // stream-json providers hand onChunk the whole answer text each time; raw-stdout ones
+      // (ollama, lms) hand it incremental fragments, which must be accumulated or only the
+      // last fragment is ever displayed.
+      const streamsIncrementally = !(copilotCfg && getCopilotOption(copilotCfg.cli)?.supportsStreamJson);
       // Mutable: in auto mode the router picks a tier per ask, surfaced via a 'model'
       // stream event — the header updates from "· auto" to the actual tier (e.g. "· haiku").
       let providerLabel = copilotCfg
@@ -546,7 +550,7 @@ export function App({ version = VERSION }: { version?: string }) {
         };
 
         const rawBuffer = await chatStream(copilotMessage, (chunk) => {
-          streamBuffer = chunk;
+          streamBuffer = streamsIncrementally ? streamBuffer + chunk : chunk;
           const visible = displayText(streamBuffer);
           if (visible) {
             const textIdx = activityLog.findIndex(e => e.kind === 'text');
@@ -654,10 +658,12 @@ export function App({ version = VERSION }: { version?: string }) {
               ? `I ran the commands you asked for. Results:\n\n${resultsBlock}\n\nDo NOT output more commands now — give your final answer to my original question and summarize what you found.\n\nMy original question was: ${trimmed}`
               : `I ran the commands you asked for. Results:\n\n${resultsBlock}\n\nIf you need to run more commands, output them in a bash block. Otherwise, answer my original question and summarize what you found.\n\nMy original question was: ${trimmed}`;
 
+            let followupBuffer = '';
             const followupRaw = await chatStream(
               followupPrompt,
               (chunk) => {
-                const visible = displayText(chunk);
+                followupBuffer = streamsIncrementally ? followupBuffer + chunk : chunk;
+                const visible = displayText(followupBuffer);
                 if (visible) {
                   const textIdx = followupLog.findIndex(e => e.kind === 'text');
                   if (textIdx >= 0) {
