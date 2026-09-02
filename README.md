@@ -7,6 +7,10 @@
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-4C566A?style=flat-square)](https://github.com/geins-io/geins-cli/releases)
 [![last commit](https://img.shields.io/github/last-commit/geins-io/geins-cli?style=flat-square&color=6E7781)](https://github.com/geins-io/geins-cli/commits/main)
 
+[![race this repo](https://contrib-run.fly.dev/shield/geins-io/geins-cli/race.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+[![commits](https://contrib-run.fly.dev/shield/geins-io/geins-cli/contributions.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+[![track](https://contrib-run.fly.dev/shield/geins-io/geins-cli/difficulty.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+
 CLI for Geins Commerce Backend. Built with Bun, Ink (React TUI), and TypeScript.
 
 ## Installation
