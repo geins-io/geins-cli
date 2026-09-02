@@ -1,5 +1,16 @@
 # Geins CLI
 
+[![Bun](https://img.shields.io/badge/Bun-1.0%2B-000000?style=flat-square&logo=bun&logoColor=fbf0df)](https://bun.sh)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Ink + React](https://img.shields.io/badge/Ink%20%2B%20React-19-20232A?style=flat-square&logo=react&logoColor=61DAFB)](https://github.com/vadimdemedes/ink)
+[![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-4C566A?style=flat-square)](https://github.com/geins-io/geins-cli/releases)
+[![last commit](https://img.shields.io/github/last-commit/geins-io/geins-cli?style=flat-square&color=6E7781)](https://github.com/geins-io/geins-cli/commits/main)
+
+[![race this repo](https://contrib-run.fly.dev/shield/geins-io/geins-cli/race.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+[![commits](https://contrib-run.fly.dev/shield/geins-io/geins-cli/contributions.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+[![track](https://contrib-run.fly.dev/shield/geins-io/geins-cli/difficulty.svg)](https://contrib-run.fly.dev/drive/geins-io/geins-cli)
+
 CLI for Geins Commerce Backend. Built with Bun, Ink (React TUI), and TypeScript.
 
 ## Installation
