@@ -13,7 +13,8 @@
         "title": "Synapse",
         "width": 1100,
         "height": 760,
-        "url": "index.html"
+        "url": "index.html",
+        "visible": false
       }
     ],
     "security": {
@@ -39,6 +40,11 @@
         "https://github.com/geins-io/geins-cli/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBQThENTU0NEJBMjQ1RDkKUldUWlJhSkxWTldvT3FhdFpONDBiVit6blBTcHVGaG54c0VxVUIzUGk1Y0hoalh0d1dNRExydVoK"
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["geins"]
+      }
     }
   }
 }

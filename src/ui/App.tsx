@@ -778,6 +778,7 @@ export function App({ version = VERSION }: { version?: string }) {
           }
           logText('  /history    Search past sessions     /history <query>');
           logText('  /memory     View learned knowledge   /memory clear (start fresh)');
+          logText('  /studio     Studio agent             /studio connect | open | mode full|standard | auto on|off');
           logText('  /theme      Switch dark/light mode');
           logText('  /clear      Clear the screen');
           logText('  /exit       Exit the CLI');
@@ -2434,6 +2435,12 @@ export function App({ version = VERSION }: { version?: string }) {
         case 'theme': {
           const newTheme = await appState.toggleTheme();
           logSuccess(`  ✓ Switched to ${newTheme} mode`);
+          break;
+        }
+
+        case 'studio': {
+          const { studioCommand } = await import('../commands/studio.ts');
+          for (const line of await studioCommand(args)) logText(`  ${line}`);
           break;
         }
 

@@ -446,6 +446,19 @@ export const APIKEY_HELP = [
   'pass them straight to `apikey set`. That page is the canonical source for these credentials.',
 ].join('\n');
 
+export const STUDIO_HELP = [
+  'geins studio — the Studio agent that `geins serve` (Synapse) hosts for Geins Studio tabs.',
+  '',
+  '  status                        Show agent settings',
+  '  connect [studio-url]          Pair a Studio tab with this helper (opens the browser)',
+  '  open                          Open the Studio site paired most recently',
+  '  mode standard|full            full: your Claude Code setup, plugins, MCP servers and all tools',
+  '  auto on|off                   Start agent sessions in auto mode (a classifier approves actions)',
+  '  provider claude|codex         Agent for new sessions (the Studio panel can switch it too)',
+  '  origin add|remove <url>       Studio sites allowed to connect (https, or http on localhost)',
+  '  unpair                        New pairing secret; every paired Studio tab must connect again',
+].join('\n');
+
 export const COMMAND_GROUPS: ReadonlyArray<{ name: string; synopsis: string }> = [
   { name: 'whoami', synopsis: 'show the authenticated user + active account' },
   { name: 'account', synopsis: 'account settings: markets, languages, locales (v2 Account API)' },
@@ -457,6 +470,7 @@ export const COMMAND_GROUPS: ReadonlyArray<{ name: string; synopsis: string }> =
   { name: 'apikey', synopsis: 'manage API-key profiles (per-account credentials)' },
   { name: 'output', synopsis: 'set/show the folder where command JSON is dumped' },
   { name: 'memory', synopsis: 'copilot knowledge base: list/add/export/clear durable facts, preferences, and recent Q&A for this account; on/off to toggle memory' },
+  { name: 'studio', synopsis: 'Studio agent settings: pair a Studio site, agent mode, provider, auto mode (only when the user asks about the Studio agent)' },
 ];
 
 /**
