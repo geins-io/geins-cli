@@ -99,6 +99,13 @@ jobs:
         shell: bash
         run: bun run stage:sidecar --triple "${{ matrix.rust_target }}" --bun-target "${{ matrix.bun_target }}"
 
+      # A manual run is a draft no updater ever reads, so it skips the updater
+      # artifacts and with them the update signing key.
+      - name: Skip updater artifacts for drafts
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: bun -e "const f='src-tauri/tauri.conf.json';const c=require('./'+f);c.bundle.createUpdaterArtifacts=false;require('fs').writeFileSync(f, JSON.stringify(c,null,2)+'\n')"
+
       # 3) Build + sign the desktop bundle. tauri-action also emits the signed
       #    updater artifacts that feed the `platforms` section of latest.json.
       - name: Build desktop app
