@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 
-const CONFIG_DIR = join(homedir(), '.config', 'geins');
+export const CONFIG_DIR = join(homedir(), '.config', 'geins');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const SESSION_PATH = join(CONFIG_DIR, 'session.json');
 const CREDENTIALS_PATH = join(CONFIG_DIR, 'credentials.json');
@@ -25,6 +26,23 @@ export interface GeinsConfig {
   copilot?: CopilotConfig;
   /** Whether the copilot uses persistent memory (recall + persist + prompt instructions). Default on. */
   memoryEnabled?: boolean;
+  /** The Studio agent served by `geins serve` (see src/agent/settings.ts). */
+  studioAgent?: StudioAgentConfig;
+}
+
+export interface StudioAgentConfig {
+  /** `full`: the user's own Claude Code setup and every tool. Default `standard`. */
+  mode?: 'standard' | 'full';
+  /** Starting permission mode for new agent sessions. Default `auto` in full mode. */
+  permissionMode?: 'default' | 'auto';
+  /** Agent harness for new sessions; the panel's picker updates it. Default `claude`. */
+  provider?: 'claude' | 'codex';
+  /** Secret a Studio tab presents on /agent; set by pairing. */
+  pairingToken?: string;
+  /** Studio origins allowed to pair, e.g. `https://studio.geins.io`. */
+  studioOrigins?: string[];
+  /** The Studio site paired most recently; `studio open` opens it. */
+  lastOrigin?: string;
 }
 
 export interface StoredSession {
@@ -95,9 +113,28 @@ async function readJson<T>(path: string): Promise<T | null> {
   }
 }
 
+// Write a temp file and rename it over the target. Synapse runs several geins
+// processes (serve, the TUI, `studio …`) that read-modify-write the config; a
+// plain writeFile truncates first, so a reader in that window parses nothing,
+// falls back to `{}` and its next save wipes every other setting.
 async function writeJson<T>(path: string, data: T): Promise<void> {
   await ensureDir();
-  await writeFile(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+  const temp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temp, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(temp, path);
+      return;
+    } catch (err) {
+      // Windows refuses the rename while another process has the target open.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= 20 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) {
+        await unlink(temp).catch(() => {});
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
 }
 
 export async function loadConfig(): Promise<GeinsConfig> {

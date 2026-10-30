@@ -83,7 +83,7 @@ import { listSessions, loadSessionEntries, formatTranscriptLines, transcriptJson
 import { chat, getCopilotConfig, clearConversationHistory, getMemoryEnabled, setMemoryEnabled } from './commands/copilot.ts';
 import { outputJson } from './output/format.ts';
 import { setBaseTitle } from './output/title.ts';
-import { PRODUCT_HELP, VARIANTS_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP } from './commands/help-text.ts';
+import { PRODUCT_HELP, VARIANTS_HELP, ORDER_HELP, CAMPAIGN_HELP, ACCOUNT_HELP, MERCHANT_HELP, MEMORY_HELP, APIKEY_HELP, STUDIO_HELP } from './commands/help-text.ts';
 import { VERSION } from './version.ts';
 
 /** Resolve a JSON body from --file <path>, --body '<json>', or piped stdin. */
@@ -251,7 +251,9 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     console.log('  api       Raw API request');
     console.log('  output    Set/show the folder where responses + logs are dumped');
     console.log('  ask       Ask the copilot a question (-c/--continue to keep the prior conversation)');
-    console.log('  resume    Print a past session transcript (no id → list sessions)\n');
+    console.log('  resume    Print a past session transcript (no id → list sessions)');
+    console.log('  studio    Studio agent: pair a Studio tab, agent mode, auto mode (studio --help)');
+    console.log('  serve     Local helper for Synapse and the Studio agent\n');
     console.log('Global flags:');
     console.log('  --account <name>      Live-API apikey profile, e.g. prod-labs (alias --profile/--apikey; or GEINS_ACCOUNT)');
     console.log('  --account-name <name> v2 account by friendly name, e.g. labs (or GEINS_ACCOUNT_NAME) — sets x-account-key');
@@ -282,6 +284,7 @@ async function runDirect(rawArgs: string[]): Promise<void> {
     else if (commandName === 'merchant') console.log(MERCHANT_HELP);
     else if (commandName === 'memory') console.log(MEMORY_HELP);
     else if (commandName === 'apikey') console.log(APIKEY_HELP);
+    else if (commandName === 'studio') console.log(STUDIO_HELP);
     else console.log(`${commandName} — CLI command`);
     return;
   }
@@ -292,6 +295,11 @@ async function runDirect(rawArgs: string[]): Promise<void> {
         const { serveCommand } = await import('./server/serve.ts');
         await serveCommand(commandArgs);
         return;
+      }
+      case 'studio': {
+        const { studioCommand } = await import('./commands/studio.ts');
+        for (const line of await studioCommand(commandArgs)) console.log(line);
+        break;
       }
       case 'update': {
         const { updateCommand } = await import('./commands/update.ts');
