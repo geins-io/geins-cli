@@ -87,6 +87,16 @@ ${XTERM_CSS}
     border-radius: 5px; padding: 6px 8px; font: inherit;
   }
   #prompt { flex: 1; }
+  #picker { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid #1c2230; background: #0e131c; }
+  #picker .title { color: #c792ea; font-weight: 700; }
+  #picker label { display: grid; grid-template-columns: 130px minmax(0, 320px); align-items: center; }
+  #picker .actions { display: flex; gap: 8px; }
+  #picker button {
+    background: #1c2230; color: #d6deeb; border: 1px solid #2a3346;
+    border-radius: 5px; padding: 3px 10px; cursor: pointer; font: inherit;
+  }
+  #picker button:disabled { opacity: .5; cursor: default; }
+  #copilotPick { color: #c792ea; }
   #login { max-width: 360px; margin: 60px auto; display: flex; flex-direction: column; gap: 10px; }
   #login h2 { color: #7fdbca; margin: 0 0 6px; }
   #login input, #login button, #login select { width: 100%; padding: 8px; }
@@ -100,6 +110,7 @@ ${XTERM_CSS}
   <header class="hidden" id="topbar">
     <span class="brand">synapse</span>
     <span class="mode command" id="modePill">command</span>
+    <button id="copilotPick" class="hidden" title="Choose the copilot provider and model"></button>
     <span class="who" id="who"></span>
     <button id="logout">logout</button>
   </header>
@@ -123,6 +134,14 @@ ${XTERM_CSS}
   </div>
 
   <div id="out" class="hidden"></div>
+  <div id="picker" class="hidden">
+    <div class="title">Copilot</div>
+    <label>Provider <select id="pickProvider"></select></label>
+    <label id="pickModelRow">Model <select id="pickModel"></select></label>
+    <label id="pickEffortRow">Reasoning effort <select id="pickEffort"></select></label>
+    <div id="pickMsg" class="line dim"></div>
+    <div class="actions"><button id="pickSave">Save</button><button id="pickCancel">Cancel</button></div>
+  </div>
   <form id="bar" class="hidden">
     <input id="prompt" type="text" placeholder="Type a command, or shift+tab for copilot…" autocomplete="off" />
     <button type="submit">Send</button>
@@ -263,6 +282,88 @@ ${escapeScript(FIT_JS)}
       api('/login/account', { method: 'POST', body: JSON.stringify({ pendingId: pendingId, accountKey: document.getElementById('account').value }) }).then(handleStage).catch(function (e) { msg.textContent = String(e); });
     };
 
+    // --- Copilot provider + model (the TUI's /copilot setup and /model pickers) ---
+    var copilot = null; // { cli, command, model } once configured
+    var META_MODELS = { auto: 1, 'auto-smart': 1 }; // routed per ask, so no effort to pick
+    var picker = document.getElementById('picker');
+    var pickPill = document.getElementById('copilotPick');
+    var pickProvider = document.getElementById('pickProvider');
+    var pickModel = document.getElementById('pickModel');
+    var pickEffort = document.getElementById('pickEffort');
+    var pickModelRow = document.getElementById('pickModelRow');
+    var pickEffortRow = document.getElementById('pickEffortRow');
+    var pickMsg = document.getElementById('pickMsg');
+    var pickSave = document.getElementById('pickSave');
+    var pickSeq = 0, pickEfforts = [];
+    function fill(sel, items, selected) {
+      sel.innerHTML = '';
+      items.forEach(function (it) { var o = el('option', null, it[1]); o.value = it[0]; sel.appendChild(o); });
+      if (items.some(function (it) { return it[0] === selected; })) sel.value = selected;
+    }
+    function pairs(values) { return values.map(function (v) { return [v, v]; }); }
+    function pickMessage(text, cls) { pickMsg.className = 'line ' + (cls || 'dim'); pickMsg.textContent = text; }
+    function renderCopilot() {
+      pickPill.textContent = copilot ? copilot.command + (copilot.model ? ' · ' + copilot.model : '') : 'choose copilot';
+      pickPill.classList.remove('hidden');
+    }
+    function loadCopilot() {
+      return api('/copilot/providers').then(function (r) { copilot = r.current || null; renderCopilot(); return r; });
+    }
+    function syncEffort() {
+      pickEffortRow.classList.toggle('hidden', !pickEfforts.length || pickModelRow.classList.contains('hidden') || !!META_MODELS[pickModel.value]);
+    }
+    function loadModels() {
+      var cli = pickProvider.value, seq = ++pickSeq;
+      pickSave.disabled = true;
+      pickModelRow.classList.add('hidden');
+      pickEffortRow.classList.add('hidden');
+      pickMessage('Checking ' + cli + '…');
+      api('/copilot/models?cli=' + encodeURIComponent(cli)).then(function (r) {
+        if (seq !== pickSeq) return;
+        if (r.error) { pickMessage(r.error, 'err'); return; }
+        if (!r.installed) { pickMessage("'" + cli + "' isn't installed, or isn't on your PATH.", 'err'); return; }
+        if (r.supportsModels && !r.models.length) { pickMessage('No models found for ' + cli + '.', 'err'); return; }
+        var current = (copilot && copilot.cli === cli && copilot.model) || '';
+        var parts = current.split(':');
+        pickEfforts = r.efforts || [];
+        fill(pickModel, pairs(r.models), parts[0]);
+        fill(pickEffort, pairs(pickEfforts), parts[1] || 'medium');
+        pickModelRow.classList.toggle('hidden', !r.models.length);
+        syncEffort();
+        pickMessage(r.version || '');
+        pickSave.disabled = false;
+      }).catch(function (e) { if (seq === pickSeq) pickMessage(String(e), 'err'); });
+    }
+    function openPicker() {
+      picker.classList.remove('hidden');
+      pickSave.disabled = true;
+      pickMessage('Loading…');
+      loadCopilot().then(function (r) {
+        fill(pickProvider, r.providers.map(function (p) { return [p.cli, p.name]; }), copilot && copilot.cli);
+        loadModels();
+        pickProvider.focus();
+      }).catch(function (e) { pickMessage(String(e), 'err'); });
+    }
+    function closePicker() { pickSeq++; picker.classList.add('hidden'); prompt.focus(); }
+    pickProvider.onchange = loadModels;
+    pickModel.onchange = syncEffort;
+    pickPill.onclick = openPicker;
+    document.getElementById('pickCancel').onclick = closePicker;
+    picker.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePicker(); });
+    pickSave.onclick = function () {
+      var model = pickModelRow.classList.contains('hidden') ? '' : pickModel.value;
+      if (model && !pickEffortRow.classList.contains('hidden')) model += ':' + pickEffort.value;
+      pickSave.disabled = true;
+      api('/copilot/config', { method: 'POST', body: JSON.stringify({ cli: pickProvider.value, model: model || undefined }) }).then(function (r) {
+        if (r.error) { pickMessage(r.error, 'err'); pickSave.disabled = false; return; }
+        copilot = r.current;
+        renderCopilot();
+        closePicker();
+        add('✓ ' + copilot.command + ' configured' + (copilot.model ? ' (model: ' + copilot.model + ')' : ''), 'dim');
+        if (!copilotActive) toggleMode();
+      }).catch(function (e) { pickMessage(String(e), 'err'); pickSave.disabled = false; });
+    };
+
     // --- Mode (mirror the TUI: default command, Shift+Tab / /copilot toggles) ---
     var copilotActive = false;
     var prompt = document.getElementById('prompt');
@@ -273,10 +374,14 @@ ${escapeScript(FIT_JS)}
       pill.className = 'mode ' + (copilotActive ? 'copilot' : 'command');
       prompt.placeholder = copilotActive ? 'Ask copilot anything, shift+tab for command…' : 'Type a command, or shift+tab for copilot…';
       foot.innerHTML = copilotActive
-        ? 'In <span class="mag">copilot</span> mode · <span class="mag">/copilot</span> or <span class="mag">shift+tab</span> to switch back'
+        ? 'In <span class="mag">copilot</span> mode · <span class="mag">/model</span> to change provider or model · <span class="mag">/copilot</span> or <span class="mag">shift+tab</span> to switch back'
         : 'Switch to <span class="mag">copilot</span> mode with <span class="cy">/copilot</span> or <span class="cy">shift+tab</span>';
     }
-    function toggleMode() { copilotActive = !copilotActive; renderMode(); prompt.focus(); }
+    // Like the TUI, entering copilot mode with nothing configured opens the setup instead.
+    function toggleMode() {
+      if (!copilotActive && !copilot) { openPicker(); return; }
+      copilotActive = !copilotActive; renderMode(); prompt.focus();
+    }
 
     // --- App ---
     function enterApp() {
@@ -306,6 +411,7 @@ ${escapeScript(FIT_JS)}
         var who = (s.user && (s.user.email || s.user.name)) || '';
         document.getElementById('who').textContent = who + (s.accountName ? '  ·  ' + s.accountName : '');
         renderMode();
+        loadCopilot().catch(function () {});
         prompt.focus();
       });
     }
@@ -325,6 +431,14 @@ ${escapeScript(FIT_JS)}
           if (!current) current = add('', '');
           current.textContent += m.text; out.scrollTop = out.scrollHeight;
         } else if (m.kind === 'tool_start') { add('• ' + (m.label || m.toolName || 'tool'), 'tool'); current = null; }
+        else if (m.kind === 'command') { add('⟳ ' + m.command, 'tool'); current = null; }
+        else if (m.kind === 'command_result') {
+          // Long results collapse, like the TUI; the model still gets them in full.
+          var output = m.output || '', lines = output ? output.split('\\n').length : 0;
+          if (output.length > 800 || lines > 12) add('  ⟐ ' + lines + ' lines · ' + output.length + ' chars (collapsed)', 'dim');
+          else if (output) add(output, m.exitCode ? 'err' : 'dim');
+          current = null;
+        }
         else if (m.kind === 'tool_end' || m.kind === 'done') { current = null; }
         else if (m.kind === 'error') { add(m.text, 'err'); current = null; }
       };
@@ -343,6 +457,7 @@ ${escapeScript(FIT_JS)}
       if (!text) return;
       // /copilot toggles mode, matching the TUI slash command.
       if (text === '/copilot') { prompt.value = ''; toggleMode(); return; }
+      if (text === '/model' || text === '/copilot set' || text === '/copilot provider') { prompt.value = ''; openPicker(); return; }
       prompt.value = '';
       if (copilotActive) {
         add('› ' + text, 'cmd');

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 
-const CONFIG_DIR = join(homedir(), '.config', 'geins');
+export const CONFIG_DIR = join(homedir(), '.config', 'geins');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 const SESSION_PATH = join(CONFIG_DIR, 'session.json');
 const CREDENTIALS_PATH = join(CONFIG_DIR, 'credentials.json');

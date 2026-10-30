@@ -19,8 +19,19 @@
 import { homedir } from 'node:os';
 import { login, verify, fetchUser, type AuthResponse } from '../auth/login.ts';
 import { loadSession, saveSession, clearSession, parseJwtExp } from '../auth/session.ts';
-import { chatStream } from '../commands/copilot.ts';
-import { executeGeinsCommand } from '../commands/copilot.ts';
+import {
+  addToolResult,
+  chatStream,
+  clearConversationHistory,
+  extractGeinsCommands,
+  COPILOT_OPTIONS,
+  executeGeinsCommand,
+  getCopilotConfig,
+  getCopilotOption,
+  listCopilotModels,
+  saveCopilotChoice,
+  testCli,
+} from '../commands/copilot.ts';
 import { WEB_SHELL_HTML } from './web-shell.ts';
 import { spawnPty, ptyAvailable, type PtyProcess } from './pty.ts';
 import { selfInvocation } from '../runtime.ts';
@@ -164,6 +175,39 @@ async function finalizeLogin(auth: AuthResponse, accountKey?: string) {
     user: { email: user.email ?? '', name, roles: user.roles ?? [] },
   });
   return { stage: 'done' as const };
+}
+
+/**
+ * One copilot ask with the TUI's loop (App.tsx): run the `geins` commands the model writes,
+ * hand back the results and let it continue, for up to 6 rounds.
+ */
+async function copilotTurn(prompt: string, send: (message: object) => void): Promise<void> {
+  const MAX_ROUNDS = 6;
+  const stream = (text: string, continuation: boolean) =>
+    chatStream(text, (chunk) => send({ kind: 'text', text: chunk }), send, { continuation });
+  let pending = await stream(prompt, false);
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const commands = extractGeinsCommands(pending);
+    if (commands.length === 0) return;
+    const results: string[] = [];
+    for (const command of commands) {
+      send({ kind: 'command', command });
+      const result = await executeGeinsCommand(command);
+      await addToolResult(command, result.output);
+      send({ kind: 'command_result', output: result.output, exitCode: result.exitCode });
+      const capped = result.output.length > 4000
+        ? `${result.output.slice(0, 4000)}\n…[truncated; full result in the output folder]`
+        : result.output;
+      results.push(`$ ${command}\n${capped}`);
+    }
+    const next = round === MAX_ROUNDS - 1
+      ? 'Do NOT output more commands now — give your final answer to my original question and summarize what you found.'
+      : 'If you need to run more commands, output them in a bash block. Otherwise, answer my original question and summarize what you found.';
+    pending = await stream(
+      `I ran the commands you asked for. Results:\n\n${results.join('\n\n')}\n\n${next}\n\nMy original question was: ${prompt}`,
+      true,
+    );
+  }
 }
 
 /**
@@ -327,6 +371,39 @@ export async function serveCommand(args: string[]): Promise<void> {
         }
       }
 
+      // The legacy shell's copilot picker (the TUI has its own, SelectCopilot).
+      if (path === '/copilot/providers') {
+        return jsonResponse({
+          current: await getCopilotConfig(),
+          providers: COPILOT_OPTIONS.map((o) => ({ cli: o.cli, name: o.name })),
+        });
+      }
+
+      if (path === '/copilot/models') {
+        const option = getCopilotOption(url.searchParams.get('cli') ?? '');
+        if (!option) return jsonResponse({ error: 'unknown provider' }, 400);
+        const test = await testCli(option);
+        if (!test.ok) return jsonResponse({ installed: false });
+        return jsonResponse({
+          installed: true,
+          version: test.version,
+          supportsModels: !!option.supportsModels,
+          models: await listCopilotModels(option),
+          efforts: option.effortChoices ?? [],
+        });
+      }
+
+      if (path === '/copilot/config' && req.method === 'POST') {
+        const { cli, model } = (await req.json()) as { cli?: string; model?: string };
+        const option = getCopilotOption(cli ?? '');
+        if (!option) return jsonResponse({ error: 'unknown provider' }, 400);
+        if (option.supportsModels && !model) return jsonResponse({ error: 'model required' }, 400);
+        // A new provider can't resume the old one's session; a new model keeps the conversation.
+        if ((await getCopilotConfig())?.cli !== option.cli) clearConversationHistory();
+        await saveCopilotChoice(option, option.supportsModels ? model : undefined);
+        return jsonResponse({ current: await getCopilotConfig() });
+      }
+
       if (path === '/command' && req.method === 'POST') {
         const { command } = (await req.json()) as { command?: string };
         if (!command) return jsonResponse({ error: 'command required' }, 400);
@@ -393,11 +470,7 @@ export async function serveCommand(args: string[]): Promise<void> {
         }
         if (!prompt) return;
         try {
-          await chatStream(
-            prompt,
-            (text) => ws.send(JSON.stringify({ kind: 'text', text })),
-            (event) => ws.send(JSON.stringify(event)),
-          );
+          await copilotTurn(prompt, (message) => ws.send(JSON.stringify(message)));
           ws.send(JSON.stringify({ kind: 'done' }));
         } catch (err) {
           ws.send(JSON.stringify({ kind: 'error', text: String((err as Error).message ?? err) }));

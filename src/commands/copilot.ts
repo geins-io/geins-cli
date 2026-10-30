@@ -1,10 +1,14 @@
-import { loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
+import { CONFIG_DIR, loadConfig, saveConfig, type CopilotConfig } from '../config/store.ts';
 import { getOutputDir, getAccountOutputDir, ensureOutputDir, recordCliFailure } from '../output/sink.ts';
 import { existsSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
+import { loadSession } from '../auth/session.ts';
+import { sonoraEnv, sonoraProfileForAccount } from '../agent/sonora.ts';
 import { getActiveSignal } from '../api/abort.ts';
 import { buildCommandCatalog, PITFALLS } from './help-text.ts';
 import { routeClaudeModel, routeAgyModel, routeCodexModel, AGY_MODELS, SMART_CANDIDATES, type SmartCandidates } from './model-router.ts';
-import { selfInvocation } from '../runtime.ts';
+import { isCompiled, selfInvocation } from '../runtime.ts';
 import { $ } from 'bun';
 import {
   appendMessage,
@@ -59,6 +63,8 @@ export interface StreamEvent {
   text?: string;
 }
 
+const SONORA_DIR = join(homedir(), '.sonora');
+
 export const COPILOT_OPTIONS: CopilotOption[] = [
   {
     name: 'Claude Code',
@@ -100,7 +106,11 @@ export const COPILOT_OPTIONS: CopilotOption[] = [
     models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'],
     effortChoices: ['low', 'medium', 'high', 'xhigh'],
     buildCmd: (model) => {
-      const cmd = ['codex', 'exec', '--ephemeral', '--skip-git-repo-check'];
+      // workspace-write so it can write into the output folder (its cwd). Codex also runs `geins`
+      // and skills itself, so they get the network and their state folders: the geins config
+      // (refreshed session) and ~/.sonora (the Sonora skill's profile pick).
+      const cmd = ['codex', 'exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true'];
+      for (const dir of [CONFIG_DIR, SONORA_DIR]) if (existsSync(dir)) cmd.push('--add-dir', dir);
       if (model) {
         const [id, effort] = model.split(':');
         if (id) cmd.push('-m', id);
@@ -249,7 +259,7 @@ async function classifySmart(cli: string, prompt: string): Promise<{ model: stri
   const cmd = smartClassifyCmd(cli);
   if (!cand || !cmd) return null;
   try {
-    const proc = Bun.spawn(cmd, { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', ...(await copilotProcOptions()) });
+    const proc = Bun.spawn(resolveCli(cmd), { stdout: 'pipe', stderr: 'pipe', stdin: 'pipe', ...(await copilotProcOptions()) });
     proc.stdin.write(buildSmartPrompt(cand, prompt));
     proc.stdin.end();
     const signal = getActiveSignal();
@@ -341,6 +351,9 @@ const SYSTEM_CONTEXT = [
   '- Your own tools (Read/Bash/Write) are ONLY for LOCAL data work — reading dropped files, parsing JSON you',
   '  already fetched with geins, building CSV/Markdown, running scripts over local data. They are NEVER a',
   '  channel to Geins itself.',
+  '- The ONE exception: when the user explicitly asks you to use one of your installed skills (e.g. "use the',
+  '  mgmtapi skill" — the Sonora Management API skill), use that skill as its instructions say. It brings its',
+  '  own credentials and profile; do not fall back to geins, or ask for geins API credentials, instead.',
   '',
   buildCommandCatalog(),
   '',
@@ -594,6 +607,14 @@ export async function listCodexModels(): Promise<string[]> {
   }
 }
 
+/** The picker's model list for a provider: probed when it can be, else static, with the routing
+ *  sentinels first. Same rules as the TUI picker (SelectCopilot). */
+export async function listCopilotModels(option: CopilotOption): Promise<string[]> {
+  if (!option.supportsModels) return [];
+  const probed = option.probeModels ? await option.probeModels().catch(() => []) : [];
+  return [...(option.metaModels ?? []), ...(probed.length ? probed : (option.models ?? []))];
+}
+
 export async function saveCopilotChoice(option: CopilotOption, model?: string): Promise<void> {
   const config = await loadConfig();
   config.copilot = { cli: option.cli, command: option.name, model };
@@ -674,16 +695,42 @@ function extractResultFromStreamJson(output: string): string {
  * there by default, and propagate the absolute output dir to geins subprocesses it
  * runs (so their dumps are written to the same place, not re-resolved relatively).
  */
+/** On Windows a spawn with an explicit `env` doesn't find npm `.cmd` shims (codex), so spawn the
+ *  resolved path instead. */
+function resolveCli(cmd: string[]): string[] {
+  const [bin, ...args] = cmd;
+  return bin ? [Bun.which(bin) ?? bin, ...args] : cmd;
+}
+
 async function copilotProcOptions(): Promise<{ cwd: string; env: Record<string, string | undefined> }> {
   // cwd is the account-nested dir so files the copilot writes itself land in the account
   // folder; GEINS_OUTPUT_DIR carries the UN-nested base so geins subprocesses re-nest once
   // (to the same place) rather than double-nesting under <base>/<account>/<account>.
   const baseDir = await getOutputDir();
   const accountDir = await ensureOutputDir();
-  return {
-    cwd: accountDir ?? process.cwd(),
-    env: baseDir ? { ...process.env, GEINS_OUTPUT_DIR: baseDir } : { ...process.env },
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...(baseDir ? { GEINS_OUTPUT_DIR: baseDir } : {}),
+    ...sonoraEnv(await sonoraProfileFor((await loadSession())?.accountName)),
   };
+  // Agents that run `geins` themselves (codex) should get this binary, not whatever else is on
+  // PATH (a `bun link` dev shim can't read its sources from inside codex's sandbox). Windows
+  // spells the key `Path`.
+  if (isCompiled()) {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+    env[key] = [dirname(process.execPath), env[key]].filter(Boolean).join(delimiter);
+  }
+  return { cwd: accountDir ?? process.cwd(), env };
+}
+
+/** The Sonora skill's profile for the logged-in account, so it doesn't ask which one each time.
+ *  Cached per account: finding it runs the plugin's script. */
+let sonoraProfile: { account?: string; profile: Promise<string | undefined> } | undefined;
+function sonoraProfileFor(account?: string): Promise<string | undefined> {
+  if (!sonoraProfile || sonoraProfile.account !== account) {
+    sonoraProfile = { account, profile: sonoraProfileForAccount(account).catch(() => undefined) };
+  }
+  return sonoraProfile.profile;
 }
 
 export async function chat(prompt: string): Promise<string> {
@@ -704,7 +751,7 @@ export async function chat(prompt: string): Promise<string> {
   sessionOriented = true;
   const cmd = option.buildCmd(turn.model);
 
-  const proc = Bun.spawn(cmd, {
+  const proc = Bun.spawn(resolveCli(cmd), {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'pipe',
@@ -852,7 +899,7 @@ export async function chatStream(
     const cmd = option.buildCmd(turn.model);
     if (resumeId) cmd.push('--resume', resumeId);
 
-    const proc = Bun.spawn(cmd, {
+    const proc = Bun.spawn(resolveCli(cmd), {
       stdout: 'pipe',
       stderr: 'pipe',
       stdin: 'pipe',
