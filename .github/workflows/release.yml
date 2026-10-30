@@ -1,6 +1,6 @@
 name: release
 
-# Tag-driven release. Push a tag like `v0.1.1` (or run manually) to build the
+# Tag-driven release. Push a tag like `v0.1.1` (or run manually for a draft) to build the
 # standalone CLI binaries AND the Tauri desktop bundles for every platform, sign
 # them, and publish a single `latest.json` manifest that BOTH updaters read:
 #   - the CLI self-updater (src/commands/update.ts) reads the `cli` section
@@ -27,12 +27,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             rust_target: aarch64-apple-darwin
             bun_target: bun-darwin-arm64
             platform_key: darwin-aarch64
             cli_name: geins-aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15-intel
             rust_target: x86_64-apple-darwin
             bun_target: bun-darwin-x64
             platform_key: darwin-x86_64
@@ -163,7 +163,10 @@ jobs:
           cat latest.json
           gh release upload "${RELEASE_TAG}" latest.json --repo "${{ github.repository }}" --clobber
 
+      # Only a pushed tag goes live. A manual run stays a draft, so a test build
+      # never becomes `releases/latest` and reaches every installed updater.
       - name: Publish release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${RELEASE_TAG}" --repo "${{ github.repository }}" --draft=false
